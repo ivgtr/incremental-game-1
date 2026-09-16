@@ -11,13 +11,13 @@ export function hashSeed(seed: number): number {
 }
 
 export function nextRandom(state: GameState): number {
-  let x = state.rngState || 0x6d2b79f5;
+  let x = state.run.rngState || 0x6d2b79f5;
   x ^= x << 13;
   x ^= x >>> 17;
   x ^= x << 5;
-  state.rngState = x >>> 0;
-  state.lootRoll += 1;
-  return state.rngState / 0x100000000;
+  state.run.rngState = x >>> 0;
+  state.run.lootRoll += 1;
+  return state.run.rngState / 0x100000000;
 }
 
 export function pick<T>(state: GameState, values: readonly T[]): T {
