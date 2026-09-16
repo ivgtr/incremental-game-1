@@ -16,11 +16,11 @@ export type PorterState =
   | 'WAITING_FOR_ELEVATOR'
   | 'LOADING';
 
-export type ElevatorState = 'IDLE_BOTTOM' | 'LOADING' | 'ASCENDING' | 'UNLOADING' | 'DESCENDING';
+export type ElevatorState = 'IDLE_BOTTOM' | 'LOADING' | 'ASCENDING' | 'UNLOADING' | 'DESCENDING' | 'TRAVELING';
 export type Rarity = 'COMMON' | 'UNCOMMON' | 'RARE' | 'EPIC' | 'RELIC' | 'ANOMALY';
-export type LootCategory = 'ORE' | 'VALUABLE' | 'FOSSIL' | 'RELIC' | 'ANOMALY';
-export type DepthId = 'D-001' | 'D-030';
-export type NodeProfile = 'NEAR' | 'MID' | 'FAR';
+export type LootCategory = 'ORE' | 'VALUABLE' | 'FOSSIL' | 'RELIC' | 'ANOMALY' | 'RESEARCH' | 'CORE';
+export type DepthId = 'D-001' | 'D-030' | 'D-060' | 'D-100';
+export type NodeProfile = 'NEAR' | 'MID' | 'FAR' | 'CORE';
 
 export type LootKind =
   | 'STONE'
@@ -41,7 +41,14 @@ export type LootKind =
   | 'HUNTER_COMPASS'
   | 'STRIDE_MODULE'
   | 'FRACTURE_CORE'
-  | 'BLACK_GLASS_HEART';
+  | 'BLACK_GLASS_HEART'
+  | 'CRYSTAL_MEMORY'
+  | 'SURVEY_CARTRIDGE'
+  | 'DAMAGED_RESEARCH_LOG'
+  | 'RESONANCE_SHARD'
+  | 'UNKNOWN_INSTRUMENT'
+  | 'CORE_FRAGMENT'
+  | 'CORE_MATRIX';
 
 export type AnomalyId =
   | 'GOLD_RUSH'
@@ -58,6 +65,20 @@ export type PassiveId =
   | 'LONG_STRIDE'
   | 'LAST_SWING';
 
+export type ResearchId =
+  | 'DEEP_SURVEY'
+  | 'PRIORITY_CARGO_TAG'
+  | 'MULTI_STOP_RELAY'
+  | 'STRATA_SCANNER'
+  | 'CORE_RESONANCE';
+
+export type CoreProtocolId =
+  | 'EXPERIENCED_HANDS'
+  | 'CARGO_MEMORY'
+  | 'SHAFT_BLUEPRINT'
+  | 'VETERAN_ELEVATOR'
+  | 'SURVEY_ARCHIVE';
+
 export interface LootStack {
   id: string;
   kind: LootKind;
@@ -66,6 +87,8 @@ export interface LootStack {
   category: LootCategory;
   weight: number;
   value: number;
+  dataValue: number;
+  coreValue: number;
   x: number;
   y: number;
 }
@@ -85,6 +108,8 @@ export interface MiningNode {
   fossilWeight: number;
   relicWeight: number;
   anomalyWeight: number;
+  researchWeight: number;
+  coreWeight: number;
   yieldMin: number;
   yieldMax: number;
   respawnTimer: number;
@@ -119,6 +144,14 @@ export interface Porter extends WorkerBody {
   loadingTimer: number;
 }
 
+export interface FloorTravelState {
+  from: DepthId;
+  to: DepthId;
+  remaining: number;
+  duration: number;
+  viaSurface: boolean;
+}
+
 export interface Elevator {
   x: number;
   state: ElevatorState;
@@ -128,6 +161,7 @@ export interface Elevator {
   cargo: LootStack[];
   stateTimer: number;
   rhythmBoostTrips: number;
+  travel: FloorTravelState | null;
 }
 
 export interface ToolEquipment {
@@ -137,9 +171,9 @@ export interface BootsEquipment { id: 'player-boots'; slot: 'BOOTS'; level: 1 | 
 export interface PackEquipment { id: 'player-pack'; slot: 'PACK'; level: 1 | 2; name: 'Canvas Pack' | 'Frame Pack'; }
 export interface AutomationToggle { unlocked: boolean; enabled: boolean; }
 export interface AutomationState { autoSwing: AutomationToggle; autoDispatch: AutomationToggle; }
-export interface ProgressionStats { manualSwings: number; playerDeposits: number; porterDeposits: number; elevatorTrips: number; }
+export interface ProgressionStats { manualSwings: number; playerDeposits: number; porterDeposits: number; elevatorTrips: number; floorTrips: number; }
 
-export interface Floor {
+export interface FloorState {
   id: DepthId;
   seed: number;
   nodes: MiningNode[];
@@ -147,10 +181,8 @@ export interface Floor {
 }
 
 export interface DepthProgress {
-  unlockedD030: boolean;
   current: DepthId;
-  transitionRemaining: number;
-  transitionDuration: number;
+  unlocked: DepthId[];
 }
 
 export interface AnomalyState {
@@ -166,15 +198,69 @@ export interface CollectionEntry {
   discovered: boolean;
   count: number;
 }
-
 export interface CollectionState { entries: CollectionEntry[]; }
 export interface PassiveState { unlocked: PassiveId[]; active: PassiveId[]; }
+
 export interface DiscoveryState {
   d030NodeBreaks: number;
+  d060NodeBreaks: number;
+  d100CoreBreaks: number;
   foundThisRun: number;
   firstDiscoveryBreak: number;
   firstFossilBreak: number;
   firstRelicBreak: number;
+  firstResearchBreak: number;
+}
+
+export interface ActiveResearch {
+  id: ResearchId;
+  remaining: number;
+  duration: number;
+}
+export interface ResearchState {
+  completed: ResearchId[];
+  active: ActiveResearch | null;
+}
+
+export interface CoreChamberState {
+  discovered: boolean;
+  shellBroken: boolean;
+  rebootAvailable: boolean;
+  rebootArmed: boolean;
+}
+
+export interface RunState {
+  seed: number;
+  rngState: number;
+  lootRoll: number;
+  scrap: number;
+  data: number;
+  pendingCore: number;
+  character: Character;
+  porter: Porter;
+  elevator: Elevator;
+  tool: ToolEquipment;
+  boots: BootsEquipment;
+  pack: PackEquipment;
+  automation: AutomationState;
+  stats: ProgressionStats;
+  floors: Record<DepthId, FloorState>;
+  depth: DepthProgress;
+  anomaly: AnomalyState;
+  research: ResearchState;
+  coreChamber: CoreChamberState;
+  discovery: DiscoveryState;
+  nextLootId: number;
+}
+
+export interface MetaProgression {
+  seed: number;
+  runIndex: number;
+  core: number;
+  protocols: CoreProtocolId[];
+  collection: CollectionState;
+  passives: PassiveState;
+  bestDepth: DepthId;
 }
 
 export type Selection =
@@ -183,6 +269,9 @@ export type Selection =
   | { type: 'workbench' }
   | { type: 'scanner' }
   | { type: 'archive' }
+  | { type: 'research' }
+  | { type: 'core-console' }
+  | { type: 'core-chamber' }
   | null;
 
 export type GameEventType =
@@ -191,10 +280,14 @@ export type GameEventType =
   | 'LOOT_ROLL' | 'TREASURE_ROLL' | 'DISCOVERY_FOUND' | 'LOOT_SPAWN' | 'LOOT_PICKUP' | 'MINER_RETURN'
   | 'LOOT_DEPOSIT' | 'PORTER_JOB_ASSIGNED' | 'PORTER_PICKUP' | 'PORTER_DEPOSIT'
   | 'AUTO_DISPATCH_TRIGGER' | 'ELEVATOR_DEPART' | 'ELEVATOR_ARRIVE_SURFACE' | 'LOOT_APPRAISE'
-  | 'RESOURCE_GAIN' | 'ELEVATOR_RETURN' | 'EQUIPMENT_UPGRADE' | 'EQUIPMENT_CHANGED'
-  | 'AUTOMATION_UNLOCKED' | 'AUTOMATION_TOGGLED' | 'PORTER_UNLOCKED'
-  | 'DEPTH_UNLOCKED' | 'DEPTH_ENTERED' | 'ANOMALY_OPTIONS_GENERATED' | 'ANOMALY_SELECTED'
-  | 'COLLECTION_REGISTERED' | 'COLLECTION_DUPLICATE' | 'PASSIVE_UNLOCKED' | 'PASSIVE_EQUIPPED';
+  | 'RESOURCE_GAIN' | 'DATA_GAIN' | 'CORE_CHARGE_GAINED' | 'ELEVATOR_RETURN'
+  | 'EQUIPMENT_UPGRADE' | 'EQUIPMENT_CHANGED' | 'AUTOMATION_UNLOCKED' | 'AUTOMATION_TOGGLED' | 'PORTER_UNLOCKED'
+  | 'DEPTH_UNLOCKED' | 'FLOOR_TRAVEL_REQUESTED' | 'ELEVATOR_TRAVEL_STARTED' | 'DEPTH_ENTERED'
+  | 'ANOMALY_OPTIONS_GENERATED' | 'ANOMALY_SELECTED'
+  | 'COLLECTION_REGISTERED' | 'COLLECTION_DUPLICATE' | 'PASSIVE_UNLOCKED' | 'PASSIVE_EQUIPPED'
+  | 'RESEARCH_STARTED' | 'RESEARCH_COMPLETED'
+  | 'CORE_CHAMBER_DISCOVERED' | 'REBOOT_AVAILABLE' | 'REBOOT_ARMED' | 'REBOOT_COMMITTED'
+  | 'CORE_GAINED' | 'CORE_PROTOCOL_PURCHASED' | 'RUN_STARTED';
 
 export interface GameEvent {
   id: number;
@@ -204,29 +297,12 @@ export interface GameEvent {
 }
 
 export interface GameState {
-  version: 3;
+  version: 4;
   elapsed: number;
-  runSeed: number;
-  rngState: number;
-  lootRoll: number;
-  scrap: number;
-  character: Character;
-  porter: Porter;
-  elevator: Elevator;
-  tool: ToolEquipment;
-  boots: BootsEquipment;
-  pack: PackEquipment;
-  automation: AutomationState;
-  stats: ProgressionStats;
-  floor: Floor;
-  depth: DepthProgress;
-  anomaly: AnomalyState;
-  collection: CollectionState;
-  passives: PassiveState;
-  discovery: DiscoveryState;
+  run: RunState;
+  meta: MetaProgression;
   selection: Selection;
   events: GameEvent[];
   eventHistory: GameEvent[];
   nextEventId: number;
-  nextLootId: number;
 }
