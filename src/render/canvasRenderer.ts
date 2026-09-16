@@ -65,6 +65,10 @@ export class CanvasRenderer {
       if (Math.hypot(x - node.x, y - (node.y - 9)) <= 22) return { type: 'node', id: node.id };
     }
 
+    const overLiftControl = x >= WORLD.elevatorX + 24 && x <= WORLD.elevatorX + 34
+      && y >= WORLD.floorY - 21 && y <= WORLD.floorY - 4;
+    if (overLiftControl) return { type: 'elevator' };
+
     const cageY = elevatorY(state);
     if (x >= WORLD.elevatorX - 23 && x <= WORLD.elevatorX + 23 && y >= cageY - 17 && y <= cageY + 19) {
       return { type: 'elevator' };
