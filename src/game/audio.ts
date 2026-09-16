@@ -2,12 +2,10 @@ import type { GameEvent } from './types';
 
 export class GameAudio {
   private context: AudioContext | null = null;
-
   unlock(): void {
     if (!this.context) this.context = new AudioContext();
     if (this.context.state === 'suspended') void this.context.resume();
   }
-
   handle(event: GameEvent): void {
     if (!this.context) return;
     if (event.type === 'MINER_SWING_HIT') this.tone(118, 0.055, 'square', 0.045);
@@ -17,26 +15,22 @@ export class GameAudio {
     if (event.type === 'ELEVATOR_ARRIVE_SURFACE') this.sequence([330, 520], 0.055, 0.035);
     if (event.type === 'RESOURCE_GAIN') this.sequence([440, 660, 880], 0.045, 0.025);
     if (event.type === 'EQUIPMENT_CHANGED') this.sequence([392, 523, 659], 0.07, 0.035);
-    if (event.type === 'AUTOMATION_UNLOCKED' || event.type === 'PORTER_UNLOCKED') this.sequence([523, 659, 784], 0.06, 0.028);
-    if (event.type === 'LOOT_SPAWN' && event.data?.rarity === 'RARE') this.sequence([740, 988, 1175], 0.08, 0.03);
+    if (event.type === 'AUTOMATION_UNLOCKED' || event.type === 'PORTER_UNLOCKED' || event.type === 'PASSIVE_UNLOCKED') this.sequence([523, 659, 784], 0.06, 0.028);
+    if (event.type === 'DISCOVERY_FOUND') {
+      const rarity = String(event.data?.rarity ?? 'RARE');
+      const notes = rarity === 'ANOMALY' ? [659, 831, 1047] : rarity === 'RELIC' ? [587, 784, 988] : [740, 988];
+      this.sequence(notes, 0.07, 0.026);
+    }
+    if (event.type === 'DEPTH_ENTERED') this.sequence([220, 196, 165], 0.1, 0.025);
   }
-
   private sequence(frequencies: number[], duration: number, gain: number): void {
     frequencies.forEach((frequency, index) => this.tone(frequency, duration, 'square', gain, index * duration * 0.8));
   }
-
   private tone(frequency: number, duration: number, type: OscillatorType, gainValue: number, delay = 0): void {
-    const context = this.context;
-    if (!context) return;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    const start = context.currentTime + delay;
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, start);
-    gain.gain.setValueAtTime(gainValue, start);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
-    oscillator.connect(gain).connect(context.destination);
-    oscillator.start(start);
-    oscillator.stop(start + duration);
+    const context = this.context; if (!context) return;
+    const oscillator = context.createOscillator(); const gain = context.createGain(); const start = context.currentTime + delay;
+    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, start); gain.gain.setValueAtTime(gainValue, start);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + duration); oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start); oscillator.stop(start + duration);
   }
 }

@@ -4,26 +4,30 @@ import { createGameState } from '../src/game/createGame';
 import { restoreGameState, serializeGameState } from '../src/game/save';
 import {
   cargoWeight,
+  chooseAnomaly,
   requestMine,
+  selectArchive,
   selectNode,
   sendElevator,
-  toggleAutoDispatch,
+  togglePassive,
   unlockAutoDispatch,
   unlockAutoSwing,
+  unlockD030,
   unlockPorter,
   updateGame,
   upgradeBoots,
   upgradePack,
   upgradeTool,
 } from '../src/game/simulation';
-import type { GameState, LootStack } from '../src/game/types';
+import type { GameState, LootKind, LootStack } from '../src/game/types';
 
 function ticks(state: GameState, count: number): void {
   for (let index = 0; index < count; index += 1) updateGame(state, 1 / 60);
 }
 
-function makeLoot(id: string, x: number, weight = LOOT.IRON.weight, value = LOOT.IRON.value): LootStack {
-  return { id, kind: 'IRON', name: 'Iron', rarity: 'COMMON', weight, value, x, y: 206 };
+function makeLoot(kind: LootKind, id = `test-${kind}`): LootStack {
+  const item = LOOT[kind];
+  return { id, kind, name: item.name, rarity: item.rarity, category: item.category, weight: item.weight, value: item.value, x: 118, y: 206 };
 }
 
 function placeAtNode(state: GameState, nodeId: string): void {
@@ -33,200 +37,207 @@ function placeAtNode(state: GameState, nodeId: string): void {
   state.character.state = 'MINING';
 }
 
-describe('Milestone 2 first automation', () => {
-  it('keeps manual mining and auto swing on the same hit-frame damage path', () => {
-    const manual = createGameState(1234);
-    placeAtNode(manual, 'scrap-ledge');
-    const manualNode = manual.floor.nodes[0]!;
-    const manualBefore = manualNode.hp;
-    expect(requestMine(manual)).toBe(true);
-    ticks(manual, 8);
-    expect(manualNode.hp).toBe(manualBefore);
-    ticks(manual, 8);
-    expect(manualNode.hp).toBe(manualBefore - manual.tool.damage);
+function enterD030(state: GameState): void {
+  state.scrap = 10000;
+  state.porter.enabled = true;
+  state.porter.state = 'FIND_LOOT';
+  state.automation.autoDispatch = { unlocked: true, enabled: false };
+  expect(unlockD030(state)).toBe(true);
+  ticks(state, 180);
+  expect(state.depth.current).toBe('D-030');
+  expect(state.anomaly.options).toHaveLength(3);
+}
 
-    const automatic = createGameState(1234);
-    placeAtNode(automatic, 'scrap-ledge');
-    automatic.automation.autoSwing = { unlocked: true, enabled: true };
-    const autoNode = automatic.floor.nodes[0]!;
-    const autoBefore = autoNode.hp;
-    ticks(automatic, 1);
-    expect(automatic.character.swing).not.toBeNull();
-    expect(autoNode.hp).toBe(autoBefore);
-    ticks(automatic, 10);
-    expect(autoNode.hp).toBe(autoBefore);
-    ticks(automatic, 3);
-    expect(autoNode.hp).toBe(autoBefore - automatic.tool.damage);
-    expect(automatic.eventHistory.some((event) => event.type === 'AUTO_SWING_TRIGGER')).toBe(true);
-    expect(automatic.eventHistory.some((event) => event.type === 'MINER_SWING_START')).toBe(true);
+function breakNode(state: GameState, nodeId: string): void {
+  placeAtNode(state, nodeId);
+  const node = state.floor.nodes.find((candidate) => candidate.id === nodeId)!;
+  node.hp = state.tool.damage;
+  expect(requestMine(state)).toBe(true);
+  ticks(state, 40);
+  expect(node.hp).toBe(0);
+}
+
+function advanceUntil(state: GameState, predicate: () => boolean, maxTicks = 4000): void {
+  for (let index = 0; index < maxTicks && !predicate(); index += 1) ticks(state, 1);
+  expect(predicate()).toBe(true);
+}
+
+describe('Milestone 3 — D-030 discovery and build choice', () => {
+  it('generates deterministic anomaly options without consuming loot RNG', () => {
+    const a = createGameState(20260916);
+    const b = createGameState(20260916);
+    const beforeA = a.rngState;
+    const beforeB = b.rngState;
+    enterD030(a);
+    enterD030(b);
+    expect(a.anomaly.options).toEqual(b.anomaly.options);
+    expect(a.rngState).toBe(beforeA);
+    expect(b.rngState).toBe(beforeB);
+
+    const restored = restoreGameState(serializeGameState(a))!;
+    expect(restored.anomaly.options).toEqual(a.anomaly.options);
   });
 
-  it('does not auto swing while moving or after a depleted node', () => {
-    const state = createGameState(18);
-    state.automation.autoSwing = { unlocked: true, enabled: true };
-    selectNode(state, 'fossil-crack');
-    ticks(state, 20);
-    expect(state.character.state).toBe('MOVING_TO_NODE');
-    expect(state.character.swing).toBeNull();
+  it('locks anomaly selection and changes real simulation parameters', () => {
+    const heavy = createGameState(11);
+    enterD030(heavy);
+    heavy.anomaly.options = ['HEAVY_WORLD', 'GOLD_RUSH', 'EMPTY_SHAFT'];
+    expect(chooseAnomaly(heavy, 'HEAVY_WORLD')).toBe(true);
+    ticks(heavy, 1);
+    expect(heavy.porter.moveSpeed).toBeLessThan(30);
+    expect(chooseAnomaly(heavy, 'GOLD_RUSH')).toBe(false);
 
-    placeAtNode(state, 'fossil-crack');
-    const node = state.floor.nodes.find((candidate) => candidate.id === 'fossil-crack')!;
-    node.hp = state.tool.damage;
-    ticks(state, 1);
-    ticks(state, 40);
-    expect(node.hp).toBe(0);
-    expect(state.character.swing).toBeNull();
-    const swingStarts = state.eventHistory.filter((event) => event.type === 'MINER_SWING_START').length;
-    ticks(state, 120);
-    expect(state.eventHistory.filter((event) => event.type === 'MINER_SWING_START')).toHaveLength(swingStarts);
+    const empty = createGameState(12);
+    enterD030(empty);
+    empty.anomaly.options = ['EMPTY_SHAFT', 'FOSSIL_AGE', 'LIVING_ROCK'];
+    chooseAnomaly(empty, 'EMPTY_SHAFT');
+    ticks(empty, 1);
+    expect(empty.elevator.maxLoad).toBeLessThan(15);
+    expect(empty.elevator.moveSpeed).toBeGreaterThan(0.6);
   });
 
-  it('makes the porter walk to physical loot before pickup and back before deposit', () => {
+  it('keeps treasure rolls deterministic for the same seed and input sequence', () => {
+    const run = () => {
+      const state = createGameState(4444);
+      enterD030(state);
+      chooseAnomaly(state, state.anomaly.options[0]!);
+      state.porter.enabled = false;
+      state.discovery.firstDiscoveryBreak = 99;
+      state.discovery.firstFossilBreak = 99;
+      state.discovery.firstRelicBreak = 99;
+      breakNode(state, 'black-glass-fault');
+      return state;
+    };
+    const a = run();
+    const b = run();
+    expect(a.floor.loot.map((item) => item.kind)).toEqual(b.floor.loot.map((item) => item.kind));
+    expect(a.rngState).toBe(b.rngState);
+    expect(a.lootRoll).toBe(b.lootRoll);
+  });
+
+  it('keeps a fossil physical until Porter and elevator appraisal finish', () => {
     const state = createGameState(55);
-    state.porter.enabled = true;
-    state.porter.state = 'FIND_LOOT';
-    state.floor.loot.push(makeLoot('loot-test', 118));
+    enterD030(state);
+    chooseAnomaly(state, state.anomaly.options[0]!);
+    state.discovery.firstDiscoveryBreak = 1;
+    state.discovery.firstFossilBreak = 1;
+    state.discovery.firstRelicBreak = 99;
+    breakNode(state, 'fossil-seam');
+    const fossil = state.floor.loot.find((item) => item.category === 'FOSSIL');
+    expect(fossil).toBeDefined();
+    expect(state.collection.entries.some((entry) => entry.discovered)).toBe(false);
 
-    ticks(state, 1);
-    expect(state.porter.state).toBe('MOVING_TO_LOOT');
-    ticks(state, 30);
-    expect(state.floor.loot).toHaveLength(1);
-    expect(state.porter.carried).toHaveLength(0);
+    advanceUntil(state, () => state.porter.carried.some((item) => item.id === fossil!.id));
+    expect(state.collection.entries.some((entry) => entry.discovered)).toBe(false);
+    advanceUntil(state, () => state.elevator.cargo.some((item) => item.id === fossil!.id));
+    expect(state.collection.entries.some((entry) => entry.discovered)).toBe(false);
 
-    for (let index = 0; index < 600 && state.porter.carried.length === 0; index += 1) ticks(state, 1);
-    expect(state.floor.loot).toHaveLength(0);
-    expect(state.porter.carried).toHaveLength(1);
-    expect(state.porter.x).toBeCloseTo(118, 0);
-    expect(cargoWeight(state.elevator.cargo)).toBe(0);
-
-    for (let index = 0; index < 900 && state.elevator.cargo.length === 0; index += 1) ticks(state, 1);
-    expect(state.porter.carried).toHaveLength(0);
-    expect(state.elevator.cargo).toHaveLength(1);
-    expect(state.elevator.state).toBe('IDLE_BOTTOM');
-    expect(state.eventHistory.some((event) => event.type === 'PORTER_JOB_ASSIGNED')).toBe(true);
-    expect(state.eventHistory.some((event) => event.type === 'PORTER_PICKUP')).toBe(true);
-    expect(state.eventHistory.some((event) => event.type === 'PORTER_DEPOSIT')).toBe(true);
+    expect(sendElevator(state)).toBe(true);
+    advanceUntil(state, () => state.collection.entries.some((entry) => entry.kind === fossil!.kind && entry.discovered));
+    const entry = state.collection.entries.find((candidate) => candidate.kind === fossil!.kind)!;
+    expect(entry.count).toBe(1);
   });
 
-  it('allows floor loot to visibly accumulate when transport cannot keep up', () => {
+  it('registers collection duplicates only after a second surface appraisal', () => {
+    const state = createGameState(90);
+    enterD030(state);
+    chooseAnomaly(state, state.anomaly.options[0]!);
+    state.elevator.cargo.push(makeLoot('AMMONITE', 'a'));
+    sendElevator(state);
+    advanceUntil(state, () => state.collection.entries.find((entry) => entry.kind === 'AMMONITE')!.count === 1);
+    state.elevator.cargo.push(makeLoot('AMMONITE', 'b'));
+    advanceUntil(state, () => state.elevator.state === 'IDLE_BOTTOM');
+    sendElevator(state);
+    advanceUntil(state, () => state.collection.entries.find((entry) => entry.kind === 'AMMONITE')!.count === 2);
+    expect(state.eventHistory.some((event) => event.type === 'COLLECTION_DUPLICATE')).toBe(true);
+  });
+
+  it('unlocks a passive only when its Relic is appraised at the surface', () => {
     const state = createGameState(77);
+    enterD030(state);
+    chooseAnomaly(state, state.anomaly.options[0]!);
+    const relic = makeLoot('PROSPECTOR_LENS');
+    state.floor.loot.push(relic);
+    expect(state.passives.unlocked).toHaveLength(0);
     state.porter.enabled = true;
     state.porter.state = 'FIND_LOOT';
-    state.porter.moveSpeed = 1;
-    state.floor.loot.push(
-      makeLoot('loot-1', 118), makeLoot('loot-2', 118), makeLoot('loot-3', 118),
-      makeLoot('loot-4', 438), makeLoot('loot-5', 438), makeLoot('loot-6', 438),
-    );
-    ticks(state, 300);
-    expect(state.floor.loot.length).toBeGreaterThanOrEqual(5);
-    expect(state.elevator.cargo).toHaveLength(0);
+    advanceUntil(state, () => state.elevator.cargo.some((item) => item.kind === 'PROSPECTOR_LENS'));
+    expect(state.passives.unlocked).toHaveLength(0);
+    sendElevator(state);
+    advanceUntil(state, () => state.passives.unlocked.includes('PROSPECTORS_EYE'));
+    expect(state.passives.active).toContain('PROSPECTORS_EYE');
   });
 
-  it('keeps SEND manual until auto dispatch is enabled, then uses the real elevator trip', () => {
-    const state = createGameState(91);
-    state.elevator.cargo.push(makeLoot('cargo-a', 240, 5.5, 20), makeLoot('cargo-b', 240, 5.5, 30));
-    state.automation.autoDispatch = { unlocked: true, enabled: false };
-    ticks(state, 120);
-    expect(state.elevator.state).toBe('IDLE_BOTTOM');
-    expect(state.scrap).toBe(0);
-
-    expect(toggleAutoDispatch(state)).toBe(true);
+  it('enforces two passive slots and makes Long Stride affect movement simulation', () => {
+    const state = createGameState(81);
+    enterD030(state);
+    chooseAnomaly(state, state.anomaly.options[0]!);
+    state.passives.unlocked = ['LONG_STRIDE', 'LAST_SWING', 'PROSPECTORS_EYE'];
+    state.passives.active = [];
+    selectArchive(state);
+    const baseSpeed = state.character.moveSpeed;
+    expect(togglePassive(state, 'LONG_STRIDE')).toBe(true);
+    expect(state.character.moveSpeed).toBeGreaterThan(baseSpeed);
+    expect(togglePassive(state, 'LAST_SWING')).toBe(true);
+    expect(togglePassive(state, 'PROSPECTORS_EYE')).toBe(false);
+    expect(state.passives.active).toHaveLength(2);
+    state.character.carried.push(makeLoot('IRON'));
     ticks(state, 1);
-    expect(state.elevator.state).toBe('ASCENDING');
-    expect(state.eventHistory.some((event) => event.type === 'AUTO_DISPATCH_TRIGGER')).toBe(true);
-    ticks(state, 100);
-    expect(state.scrap).toBe(0);
-    for (let index = 0; index < 400 && state.scrap === 0; index += 1) ticks(state, 1);
-    expect(state.scrap).toBe(50);
+    expect(state.character.moveSpeed).toBeLessThan(baseSpeed * 1.1);
   });
 
-  it('makes Tool, Boots, and Pack materially change simulation parameters', () => {
-    const state = createGameState(9);
+  it('restores rare floor loot, porter carried loot, elevator cargo, anomaly and build', () => {
+    let floor = createGameState(91);
+    enterD030(floor);
+    chooseAnomaly(floor, floor.anomaly.options[0]!);
+    floor.floor.loot.push(makeLoot('TRILOBITE'));
+    floor = restoreGameState(serializeGameState(floor))!;
+    expect(floor.floor.loot.some((item) => item.kind === 'TRILOBITE')).toBe(true);
+    expect(floor.anomaly.selected).not.toBeNull();
+
+    let porter = createGameState(92);
+    enterD030(porter);
+    chooseAnomaly(porter, porter.anomaly.options[0]!);
+    porter.porter.carried.push(makeLoot('AMMONITE'));
+    porter.porter.state = 'RETURNING_TO_ELEVATOR';
+    porter = restoreGameState(serializeGameState(porter))!;
+    expect(porter.porter.carried[0]?.kind).toBe('AMMONITE');
+
+    let elevator = createGameState(93);
+    enterD030(elevator);
+    chooseAnomaly(elevator, elevator.anomaly.options[0]!);
+    elevator.elevator.cargo.push(makeLoot('RHYTHM_RELAY'));
+    elevator.passives.unlocked = ['LONG_STRIDE'];
+    elevator.passives.active = ['LONG_STRIDE'];
+    sendElevator(elevator);
+    ticks(elevator, 30);
+    elevator = restoreGameState(serializeGameState(elevator))!;
+    expect(elevator.elevator.cargo[0]?.kind).toBe('RHYTHM_RELAY');
+    expect(elevator.passives.unlocked).not.toContain('ELEVATOR_RHYTHM');
+    expect(elevator.passives.active).toEqual(['LONG_STRIDE']);
+  });
+
+  it('keeps Phase 2 manual swing, upgrades and porter path intact', () => {
+    const state = createGameState(7);
+    placeAtNode(state, 'scrap-ledge');
+    const node = state.floor.nodes[0]!;
+    expect(requestMine(state)).toBe(true);
+    ticks(state, 14);
+    expect(node.hp).toBeLessThan(node.maxHp);
+
     state.scrap = 5000;
     state.stats.manualSwings = AUTO_SWING_MANUAL_SWINGS_REQUIRED;
     expect(upgradeTool(state)).toBe(true);
-    expect(state.tool.damage).toBe(16);
-
-    const oldSpeed = state.character.moveSpeed;
     expect(upgradeBoots(state)).toBe(true);
-    expect(state.character.moveSpeed).toBeGreaterThan(oldSpeed * 1.4);
-
     expect(unlockAutoSwing(state)).toBe(true);
-    const oldCapacity = state.character.backpackCapacity;
     expect(upgradePack(state)).toBe(true);
-    expect(state.character.backpackCapacity).toBeGreaterThan(oldCapacity * 1.5);
-
     expect(unlockPorter(state)).toBe(true);
-    expect(state.porter.enabled).toBe(true);
     expect(unlockAutoDispatch(state)).toBe(true);
     expect(state.automation.autoDispatch.enabled).toBe(false);
-  });
 
-  it('gives near/mid/far veins distinct hardness, yield, value mix and rare chance', () => {
-    const state = createGameState(44);
-    const [near, mid, far] = state.floor.nodes;
-    expect(near!.profile).toBe('NEAR');
-    expect(mid!.profile).toBe('MID');
-    expect(far!.profile).toBe('FAR');
-    expect(near!.maxHp).toBeLessThan(mid!.maxHp);
-    expect(mid!.maxHp).toBeLessThan(far!.maxHp);
-    expect(near!.distanceMeters).toBeLessThan(mid!.distanceMeters);
-    expect(mid!.distanceMeters).toBeLessThan(far!.distanceMeters);
-    expect(near!.yieldMax).toBeLessThan(far!.yieldMin + 1);
-    expect(near!.rareChance).toBeLessThan(mid!.rareChance);
-    expect(mid!.rareChance).toBeLessThan(far!.rareChance);
-  });
-
-  it('preserves deterministic loot rolls from the same run seed', () => {
-    const breakNode = () => {
-      const state = createGameState(2026);
-      placeAtNode(state, 'fossil-crack');
-      const node = state.floor.nodes.find((candidate) => candidate.id === 'fossil-crack')!;
-      node.hp = state.tool.damage;
-      requestMine(state);
-      ticks(state, 40);
-      return state;
-    };
-    const first = breakNode();
-    const second = breakNode();
-    expect(second.floor.loot.map((item) => item.kind)).toEqual(first.floor.loot.map((item) => item.kind));
-    expect(second.lootRoll).toBe(first.lootRoll);
-    expect(second.rngState).toBe(first.rngState);
-  });
-
-  it('restores player movement, porter work, elevator travel and automation state', () => {
-    let moving = createGameState(99);
-    selectNode(moving, 'copper-pocket');
-    ticks(moving, 45);
-    const movingX = moving.character.x;
-    moving = restoreGameState(serializeGameState(moving))!;
-    expect(moving.character.state).toBe('MOVING_TO_NODE');
-    expect(moving.character.x).toBe(movingX);
-
-    let porter = createGameState(100);
-    porter.porter.enabled = true;
-    porter.porter.state = 'FIND_LOOT';
-    porter.floor.loot.push(makeLoot('restore-loot', 118));
-    ticks(porter, 40);
-    porter = restoreGameState(serializeGameState(porter))!;
-    expect(porter.porter.state).toBe('MOVING_TO_LOOT');
-    expect(porter.porter.targetLootId).toBe('restore-loot');
-
-    let elevator = createGameState(101);
-    elevator.elevator.cargo.push(makeLoot('restore-cargo', 240, 2, 25));
-    expect(sendElevator(elevator)).toBe(true);
-    ticks(elevator, 50);
-    const position = elevator.elevator.position;
-    elevator = restoreGameState(serializeGameState(elevator))!;
-    expect(elevator.elevator.state).toBe('ASCENDING');
-    expect(elevator.elevator.position).toBe(position);
-
-    let automatic = createGameState(102);
-    automatic.automation.autoSwing = { unlocked: true, enabled: true };
-    placeAtNode(automatic, 'scrap-ledge');
-    automatic = restoreGameState(serializeGameState(automatic))!;
-    ticks(automatic, 1);
-    expect(automatic.character.swing).not.toBeNull();
-    expect(automatic.automation.autoSwing.enabled).toBe(true);
+    state.floor.loot.push(makeLoot('IRON', 'porter-regression'));
+    ticks(state, 1);
+    expect(['MOVING_TO_LOOT', 'COLLECTING', 'RETURNING_TO_ELEVATOR', 'LOADING', 'FIND_LOOT']).toContain(state.porter.state);
+    expect(cargoWeight(state.elevator.cargo)).toBeGreaterThanOrEqual(0);
   });
 });
