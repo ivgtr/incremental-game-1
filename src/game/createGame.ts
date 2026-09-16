@@ -1,11 +1,18 @@
-import { createNodes, WORLD } from './config';
+import {
+  createNodes,
+  PLAYER_MOVE_SPEED,
+  PLAYER_PACK_CAPACITY,
+  PORTER_CAPACITY,
+  PORTER_MOVE_SPEED,
+  WORLD,
+} from './config';
 import { hashSeed } from './rng';
 import type { GameState } from './types';
 
 export function createGameState(seed = createRunSeed()): GameState {
   const runSeed = seed >>> 0 || 1;
   return {
-    version: 1,
+    version: 2,
     elapsed: 0,
     runSeed,
     rngState: hashSeed(runSeed),
@@ -17,10 +24,23 @@ export function createGameState(seed = createRunSeed()): GameState {
       facing: -1,
       state: 'IDLE',
       targetNodeId: null,
-      moveSpeed: 42,
-      backpackCapacity: 8,
+      moveSpeed: PLAYER_MOVE_SPEED[1],
+      backpackCapacity: PLAYER_PACK_CAPACITY[1],
       carried: [],
       swing: null,
+      collectTimer: 0,
+      loadingTimer: 0,
+    },
+    porter: {
+      enabled: false,
+      x: WORLD.elevatorX + 28,
+      y: WORLD.floorY - 8,
+      facing: 1,
+      state: 'IDLE',
+      targetLootId: null,
+      moveSpeed: PORTER_MOVE_SPEED,
+      capacity: PORTER_CAPACITY,
+      carried: [],
       collectTimer: 0,
       loadingTimer: 0,
     },
@@ -33,19 +53,15 @@ export function createGameState(seed = createRunSeed()): GameState {
       cargo: [],
       stateTimer: 0,
     },
-    tool: {
-      id: 'player-tool',
-      slot: 'TOOL',
-      level: 1,
-      name: 'Rusty Pickaxe',
-      damage: 10,
+    tool: { id: 'player-tool', slot: 'TOOL', level: 1, name: 'Rusty Pickaxe', damage: 10 },
+    boots: { id: 'player-boots', slot: 'BOOTS', level: 1, name: 'Work Boots' },
+    pack: { id: 'player-pack', slot: 'PACK', level: 1, name: 'Canvas Pack' },
+    automation: {
+      autoSwing: { unlocked: false, enabled: false },
+      autoDispatch: { unlocked: false, enabled: false },
     },
-    floor: {
-      id: 'D-001',
-      seed: hashSeed(runSeed ^ 0xd001),
-      nodes: createNodes(),
-      loot: [],
-    },
+    stats: { manualSwings: 0, playerDeposits: 0, porterDeposits: 0, elevatorTrips: 0 },
+    floor: { id: 'D-001', seed: hashSeed(runSeed ^ 0xd001), nodes: createNodes(), loot: [] },
     selection: null,
     events: [],
     eventHistory: [],
