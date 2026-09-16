@@ -25,12 +25,12 @@ export const PORTER_CAPACITY = 7;
 export const AUTO_DISPATCH_MIN_WEIGHT = 11;
 
 export const UPGRADE_COSTS = {
-  tool: 70,
-  boots: 90,
-  autoSwing: 120,
-  pack: 150,
-  porter: 220,
-  autoDispatch: 280,
+  tool: 90,
+  boots: 160,
+  autoSwing: 180,
+  pack: 450,
+  porter: 700,
+  autoDispatch: 1400,
 } as const;
 
 export const AUTO_SWING_MANUAL_SWINGS_REQUIRED = 6;
