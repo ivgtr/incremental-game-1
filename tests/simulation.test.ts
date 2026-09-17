@@ -271,7 +271,7 @@ describe('Milestone 4 — multiple floors, research and first reboot', () => {
       nextLootId: 1,
     };
     const migrated = restoreGameState(JSON.stringify(rawV3))!;
-    expect(migrated.version).toBe(5);
+    expect(migrated.version).toBe(6);
     expect(migrated.run.scrap).toBe(1234);
     expect(migrated.meta.runIndex).toBe(1);
     expect(migrated.run.depth.current).toBe('D-001');

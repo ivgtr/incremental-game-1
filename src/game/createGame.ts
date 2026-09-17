@@ -8,6 +8,12 @@ import {
   createD060Nodes,
   createD100Nodes,
   createD180Nodes,
+  createD250Nodes,
+  createD400Nodes,
+  createD650Nodes,
+  ENGINEER_MOVE_SPEED,
+  FREIGHT_BUILD_PROGRESS,
+  FREIGHT_CAPACITY,
   LOOT,
   PLAYER_MOVE_SPEED,
   PLAYER_PACK_CAPACITY,
@@ -16,7 +22,17 @@ import {
   WORLD,
 } from './config';
 import { hashSeed } from './rng';
-import type { CrewMember, DepthId, FloorState, GameState, MetaProgression, Phase5RunState, RunState } from './types';
+import type {
+  CrewMember,
+  DeepProgressState,
+  DepthId,
+  FloorState,
+  GameState,
+  LogisticsState,
+  MetaProgression,
+  Phase5RunState,
+  RunState,
+} from './types';
 
 export function createGameState(seed = createMetaSeed()): GameState {
   const metaSeed = seed >>> 0 || 1;
@@ -39,6 +55,7 @@ export function createGameState(seed = createMetaSeed()): GameState {
     bestDepth: 'D-001',
     equipmentDiscoveries: [],
     ancientDiscoveries: [],
+    deepDiscoveries: [],
     legacyEquipment: null,
   };
   return createStateFromMeta(meta);
@@ -46,7 +63,7 @@ export function createGameState(seed = createMetaSeed()): GameState {
 
 export function createStateFromMeta(meta: MetaProgression): GameState {
   return {
-    version: 5,
+    version: 6,
     elapsed: 0,
     run: createNewRun(meta),
     meta,
@@ -63,8 +80,14 @@ export function createNewRun(meta: MetaProgression): RunState {
   const cargoMemory = meta.protocols.includes('CARGO_MEMORY');
   const veteranElevator = meta.protocols.includes('VETERAN_ELEVATOR');
   const surveyArchive = meta.protocols.includes('SURVEY_ARCHIVE');
+  const deepSurveyArchive = meta.protocols.includes('DEEP_SURVEY_ARCHIVE');
   const floors = createFloors(seed);
   const phase5 = createPhase5Run(meta);
+  const logistics = createLogisticsRun();
+  const deepProgress = createDeepProgress(meta);
+  const completedResearch = [] as RunState['research']['completed'];
+  if (surveyArchive) completedResearch.push('DEEP_SURVEY');
+  if (deepSurveyArchive) completedResearch.push('LOST_SURVEY');
 
   return {
     seed,
@@ -123,7 +146,7 @@ export function createNewRun(meta: MetaProgression): RunState {
     floors,
     depth: { current: 'D-001', unlocked: ['D-001'] },
     anomaly: { options: [], selected: null },
-    research: { completed: surveyArchive ? ['DEEP_SURVEY'] : [], active: null },
+    research: { completed: completedResearch, active: null },
     coreChamber: { discovered: false, shellBroken: false, rebootAvailable: false, rebootArmed: false },
     discovery: {
       d030NodeBreaks: 0,
@@ -136,6 +159,19 @@ export function createNewRun(meta: MetaProgression): RunState {
       firstResearchBreak: 2 + (hashSeed(seed ^ 0xd060da7a) % 3),
     },
     phase5,
+    logistics,
+    engineer: {
+      id: 'engineer-1',
+      name: 'ENGINEER 01',
+      unlocked: meta.protocols.includes('ENGINEER_LICENSE'),
+      state: meta.protocols.includes('ENGINEER_LICENSE') ? 'IDLE' : 'LOCKED',
+      assignedDepth: 'D-001',
+      x: WORLD.elevatorX + 56,
+      moveSpeed: ENGINEER_MOVE_SPEED,
+      job: null,
+    },
+    deepAutomation: { bores: [] },
+    deepProgress,
     nextLootId: 1,
   };
 }
@@ -180,6 +216,54 @@ function createPhase5Run(meta: MetaProgression): Phase5RunState {
   };
 }
 
+function createLogisticsRun(): LogisticsState {
+  return {
+    lines: [],
+    railCarts: [],
+    cargoHubs: [],
+    freightCage: {
+      state: 'UNBUILT',
+      targetDepth: null,
+      position: 0,
+      maxLoad: FREIGHT_CAPACITY,
+      moveSpeed: 1,
+      stateTimer: 0,
+      cargo: [],
+      priority: 'BULK',
+      buildProgress: 0,
+      requiredBuildProgress: FREIGHT_BUILD_PROGRESS,
+    },
+  };
+}
+
+function createDeepProgress(meta: MetaProgression): DeepProgressState {
+  const archived = meta.protocols.includes('DEEP_SURVEY_ARCHIVE');
+  return {
+    lostSignalFound: archived,
+    lostSampleDelivered: archived,
+    railPartsDelivered: 0,
+    nullSampleDelivered: false,
+    deepComponentsDelivered: 0,
+    d250Unlocked: false,
+    d400Unlocked: false,
+    d650Unlocked: false,
+    railBlueprint: meta.protocols.includes('RAIL_BLUEPRINT'),
+    freightBlueprint: meta.protocols.includes('FREIGHT_CHARTER'),
+    boreBlueprint: meta.protocols.includes('BORE_MEMORY'),
+    shaftConstructionStarted: false,
+    instrumentation: {
+      runStartedAt: Date.now(),
+      rebootAt: null,
+      depthUnlockedAt: {},
+      researchUnlockedAt: {},
+      railUnlockedAt: null,
+      freightUnlockedAt: null,
+      boreUnlockedAt: null,
+      d650ReachedAt: null,
+    },
+  };
+}
+
 function createInitialMiner(): CrewMember {
   return {
     id: 'crew-1',
@@ -218,14 +302,16 @@ export function deriveRunSeed(metaSeed: number, runIndex: number): number {
 }
 
 function createFloors(runSeed: number): Record<DepthId, FloorState> {
-  const floors: Record<DepthId, FloorState> = {
+  return {
     'D-001': floor('D-001', runSeed, 0xd001, createD001Nodes()),
     'D-030': floor('D-030', runSeed, 0xd030, createD030Nodes()),
     'D-060': floor('D-060', runSeed, 0xd060, createD060Nodes()),
     'D-100': floor('D-100', runSeed, 0xd100, createD100Nodes()),
+    'D-180': floor('D-180', runSeed, 0xd180, createD180Nodes()),
+    'D-250': floor('D-250', runSeed, 0xd250, createD250Nodes()),
+    'D-400': floor('D-400', runSeed, 0xd400, createD400Nodes()),
+    'D-650': floor('D-650', runSeed, 0xd650, createD650Nodes()),
   };
-  (floors as Record<string, FloorState>)['D-180'] = floor('D-180' as DepthId, runSeed, 0xd180, createD180Nodes());
-  return floors;
 }
 
 function floor(id: DepthId, runSeed: number, salt: number, nodes: FloorState['nodes']): FloorState {

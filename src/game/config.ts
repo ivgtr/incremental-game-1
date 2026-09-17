@@ -7,6 +7,7 @@ import type {
   PassiveId,
   Rarity,
   ResearchId,
+  SiteAccess,
 } from './types';
 
 export const WORLD = { width: 480, height: 270, floorY: 210, elevatorX: 240, workbenchX: 202, topY: 52, elevatorBottomY: 190 } as const;
@@ -31,6 +32,9 @@ export const D030_EXTENSION_COST = 2200;
 export const D060_EXTENSION_COST = 6500;
 export const D100_EXTENSION_COST = 7000;
 export const D180_EXTENSION_COST = 14500;
+export const D250_EXTENSION_COST = 12000;
+export const D400_EXTENSION_COST = 18000;
+export const D650_SHAFT_COST = 28000;
 export const CREW_BOARD_COST = 1800;
 export const CREW_SLOT_COSTS = [0, 0, 3200, 5200] as const;
 export const CREW_TRAVEL_DURATION = 3.4;
@@ -41,6 +45,35 @@ export const FLOOR_TRAVEL_DURATION = 2.8;
 export const FLOOR_TRAVEL_VIA_SURFACE_DURATION = 4.8;
 export const AUTO_SWING_MANUAL_SWINGS_REQUIRED = 6;
 export const UPGRADE_COSTS = { tool: 90, boots: 160, autoSwing: 180, pack: 450, porter: 700, autoDispatch: 1400 } as const;
+
+export const RAIL_INSTALL_COST = 2600;
+export const RAIL_PARTS_REQUIRED = 2;
+export const RAIL_BUILD_PROGRESS = 9;
+export const RAIL_CAPACITY = 26;
+export const RAIL_STOP_BUFFER = 34;
+export const RAIL_HUB_BUFFER = 64;
+export const RAIL_LOAD_DURATION = 1.1;
+export const RAIL_TRAVEL_DURATION = 3.2;
+export const RAIL_UNLOAD_DURATION = 0.9;
+export const FREIGHT_INSTALL_COST = 5400;
+export const FREIGHT_BUILD_PROGRESS = 12;
+export const FREIGHT_CAPACITY = 58;
+export const FREIGHT_TRAVEL_DURATION = 4.8;
+export const FREIGHT_LOAD_DURATION = 1.5;
+export const FREIGHT_UNLOAD_DURATION = 1.25;
+export const BORE_INSTALL_COST = 4200;
+export const BORE_BUILD_PROGRESS = 10;
+export const BORE_OUTPUT_CAPACITY = 26;
+export const BORE_CYCLE_DURATION = 1.35;
+export const BORE_HIT_AT = 0.72;
+export const BORE_DAMAGE = 18;
+export const BORE_LINE_CAPACITY = 36;
+export const BORE_LINE_TRANSFER_DURATION = 2.6;
+export const DEEP_COMPONENTS_REQUIRED = 3;
+export const ENGINEER_MOVE_SPEED = 36;
+export const ENGINEER_WORK_RATE = 1;
+export const RAIL_STOP_X = 414;
+export const CARGO_HUB_X = 274;
 
 export interface LootDefinition {
   name: string;
@@ -84,6 +117,11 @@ export const LOOT: Record<LootKind, LootDefinition> = {
   ANCIENT_PACK_CRATE: { name: 'Collapsed Field Pack', rarity: 'RARE', category: 'RELIC', weight: 2.1, value: 0 },
   ANCIENT_LAMP_CRATE: { name: 'Survey Lamp Case', rarity: 'EPIC', category: 'RELIC', weight: 1.4, value: 0 },
   ARCHIVE_DEVICE: { name: 'Archive Interface', rarity: 'RELIC', category: 'RESEARCH', weight: 1.8, value: 0, dataValue: 6 },
+  LOST_SIGNAL_SAMPLE: { name: 'Lost Signal Sample', rarity: 'RELIC', category: 'RESEARCH', weight: 1.6, value: 0, dataValue: 5 },
+  ANCIENT_ALLOY: { name: 'Ancient Alloy', rarity: 'UNCOMMON', category: 'ORE', weight: 2.8, value: 34 },
+  RAIL_PARTS: { name: 'Rail Assembly Parts', rarity: 'RARE', category: 'RELIC', weight: 3.2, value: 0 },
+  NULL_SAMPLE: { name: 'Null Geometry Sample', rarity: 'RELIC', category: 'RESEARCH', weight: 1.5, value: 0, dataValue: 7 },
+  DEEP_COMPONENT: { name: 'Deep Component', rarity: 'ANOMALY', category: 'RELIC', weight: 3.8, value: 0 },
 };
 
 export const VALUABLE_KINDS: readonly LootKind[] = ['GOLD_NUGGET', 'NATURAL_GOLD', 'GEM', 'OLD_COIN', 'POCKET_WATCH'];
@@ -124,6 +162,12 @@ export const RESEARCH: Record<ResearchId, ResearchDefinition> = {
   CARGO_SCHEDULER: { name: 'Cargo Scheduler', description: 'Let the one Central Elevator service Floor Cargo queues from several depths.', dataCost: 9, duration: 36, prerequisite: 'CREW_ROUTING' },
   ANCIENT_SURVEY: { name: 'Ancient Survey', description: 'Decode the signal below D-100 and authorize a shaft push toward D-180.', dataCost: 12, duration: 42, prerequisite: 'CORE_RESONANCE' },
   SALVAGE_ANALYSIS: { name: 'Salvage Analysis', description: 'Expose more information about sealed equipment before appraisal.', dataCost: 8, duration: 30, prerequisite: 'ANCIENT_SURVEY' },
+  LOST_SURVEY: { name: 'Lost Survey', description: 'Analyze the Lost Signal Sample and plot a safe route into The Lost.', dataCost: 14, duration: 44, prerequisite: 'ANCIENT_SURVEY' },
+  RAIL_LOGISTICS: { name: 'Rail Logistics', description: 'Restore old horizontal rail and authorize Minecart cargo service.', dataCost: 15, duration: 46, prerequisite: 'LOST_SURVEY' },
+  FREIGHT_ARCHITECTURE: { name: 'Freight Architecture', description: 'Authorize a cargo-only vertical Freight Cage for hub traffic.', dataCost: 18, duration: 50, prerequisite: 'RAIL_LOGISTICS' },
+  NULL_GEOMETRY: { name: 'Null Geometry', description: 'Map disconnected platforms and inaccessible sites below The Lost.', dataCost: 19, duration: 54, prerequisite: 'FREIGHT_ARCHITECTURE' },
+  REMOTE_BORE_CONTROL: { name: 'Remote Bore Control', description: 'Operate a Bore against MiningNode targets that cannot be reached on foot.', dataCost: 20, duration: 58, prerequisite: 'NULL_GEOMETRY' },
+  DEEP_SHAFT_GEOMETRY: { name: 'Deep Shaft Geometry', description: 'Turn recovered Deep Components into a construction plan for D-650.', dataCost: 24, duration: 64, prerequisite: 'REMOTE_BORE_CONTROL' },
 };
 
 export interface ProtocolDefinition { name: string; description: string; cost: number; }
@@ -136,6 +180,11 @@ export const CORE_PROTOCOLS: Record<CoreProtocolId, ProtocolDefinition> = {
   CREW_MANIFEST: { name: 'Crew Manifest', description: 'Begin the next Run with the first Miner already on the shift board.', cost: 4 },
   FREIGHT_MEMORY: { name: 'Freight Memory', description: 'Begin the next Run with Cargo Scheduler routing available.', cost: 4 },
   LEGACY_LOCKER: { name: 'Legacy Locker', description: 'Carry one appraised Equipment instance into the next Run.', cost: 5 },
+  RAIL_BLUEPRINT: { name: 'Rail Blueprint', description: 'Retain the restored Rail plan so its blueprint step is skipped next Run.', cost: 4 },
+  FREIGHT_CHARTER: { name: 'Freight Charter', description: 'Retain Freight Cage authorization and skip its blueprint stage next Run.', cost: 5 },
+  ENGINEER_LICENSE: { name: 'Engineer License', description: 'Begin future Runs with Engineer service already licensed.', cost: 4 },
+  BORE_MEMORY: { name: 'Bore Memory', description: 'Retain the Remote Bore blueprint after Reboot.', cost: 5 },
+  DEEP_SURVEY_ARCHIVE: { name: 'Deep Survey Archive', description: 'Keep the Lost survey record and shorten the repeated deep survey chain.', cost: 5 },
 };
 
 export function createD001Nodes(): MiningNode[] {
@@ -178,6 +227,28 @@ export function createD180Nodes(): MiningNode[] {
   ];
 }
 
+export function createD250Nodes(): MiningNode[] {
+  return [
+    node('lost-depot', 'Lost Depot', 'NEAR', 108, 210, 18, ['ANCIENT_ALLOY', 'IRON'], 0.34, [0.22, 0.02, 0.24, 0.01, 0.18, 0], 4, 6, 17),
+    node('hanging-vein', 'Hanging Vein', 'MID', 372, 280, 56, ['ANCIENT_ALLOY', 'COPPER'], 0.52, [0.5, 0.01, 0.3, 0.02, 0.16, 0.01], 3, 5, 23),
+    node('forgotten-terminal', 'Forgotten Terminal', 'FAR', 446, 360, 82, ['ANCIENT_ALLOY'], 0.62, [0.08, 0.01, 0.28, 0.02, 0.59, 0.02], 2, 4, 29),
+  ];
+}
+
+export function createD400Nodes(): MiningNode[] {
+  return [
+    node('null-edge', 'Null Edge', 'NEAR', 112, 250, 21, ['ANCIENT_ALLOY', 'COPPER'], 0.42, [0.25, 0.01, 0.2, 0.04, 0.48, 0.02], 3, 5, 21, 'WALKABLE'),
+    node('echo-pocket', 'Echo Pocket', 'FAR', 364, 360, 88, ['ANCIENT_ALLOY'], 0.56, [0.05, 0, 0.22, 0.08, 0.63, 0.02], 2, 4, 28, 'REMOTE_ONLY'),
+    node('fracture-well', 'Fracture Well', 'FAR', 444, 470, 124, ['ANCIENT_ALLOY'], 0.68, [0.08, 0, 0.26, 0.12, 0.3, 0.24], 1, 3, 34, 'REMOTE_ONLY'),
+  ];
+}
+
+export function createD650Nodes(): MiningNode[] {
+  return [
+    node('boundary-wall', '???', 'FAR', 390, 650, 118, ['STONE'], 0.1, [0, 0, 0.15, 0.25, 0.55, 0.05], 1, 2, 40, 'WALKABLE'),
+  ];
+}
+
 function node(
   id: string,
   name: string,
@@ -191,10 +262,11 @@ function node(
   yieldMin: number,
   yieldMax: number,
   respawnDelay: number,
+  access: SiteAccess = 'WALKABLE',
 ): MiningNode {
   return {
     id, name, profile, x, y: WORLD.floorY, hp, maxHp: hp, distanceMeters, commonKinds, treasureChance,
     valuableWeight: weights[0], fossilWeight: weights[1], relicWeight: weights[2], anomalyWeight: weights[3],
-    researchWeight: weights[4], coreWeight: weights[5], yieldMin, yieldMax, respawnTimer: 0, respawnDelay,
+    researchWeight: weights[4], coreWeight: weights[5], yieldMin, yieldMax, respawnTimer: 0, respawnDelay, access,
   };
 }

@@ -51,7 +51,7 @@ const NODE_STOP_DISTANCE = 13;
 const PLAYER_LOAD_X = WORLD.elevatorX - 19;
 const PORTER_LOAD_X = WORLD.elevatorX + 28;
 const RARITY_RANK: Record<Rarity, number> = { COMMON: 0, UNCOMMON: 1, RARE: 2, EPIC: 3, RELIC: 4, ANOMALY: 5 };
-const DEPTH_RANK: Record<DepthId, number> = { 'D-001': 1, 'D-030': 30, 'D-060': 60, 'D-100': 100 };
+const DEPTH_RANK: Record<DepthId, number> = { 'D-001': 1, 'D-030': 30, 'D-060': 60, 'D-100': 100, 'D-180': 180, 'D-250': 250, 'D-400': 400, 'D-650': 650 };
 
 export function currentFloor(state: GameState): FloorState {
   return state.run.floors[state.run.depth.current];

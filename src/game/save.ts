@@ -1,5 +1,6 @@
 import { COLLECTIBLE_KINDS, LOOT, PLAYER_PACK_CAPACITY } from './config';
 import { createGameState, createStateFromMeta } from './createGame';
+import { DEPTH_ORDER } from './depth';
 import { getModifiers } from './modifiers';
 import type {
   CollectionState,
@@ -8,12 +9,16 @@ import type {
   CrewMemberState,
   CrewRole,
   DepthId,
+  EngineerJobKind,
+  EngineerState,
   EquipmentAffix,
   EquipmentAffixId,
   EquipmentItem,
   EquipmentRarity,
   EquipmentSlot,
   FloorState,
+  FreightCageState,
+  FreightPriority,
   GameState,
   LootKind,
   LootStack,
@@ -21,28 +26,32 @@ import type {
   MinerPriority,
   MiningNode,
   OfflineReport,
-  PassiveId,
-  Phase5DepthId,
   PorterPriority,
+  RailCartState,
+  RailPriority,
+  RemoteBoreState,
   ResearchId,
+  TransportLineState,
 } from './types';
 
-export const SAVE_KEY = 'loop-shaft:save:v5';
+export const SAVE_KEY = 'loop-shaft:save:v6';
+const V5_SAVE_KEY = 'loop-shaft:save:v5';
 const V4_SAVE_KEY = 'loop-shaft:save:v4';
 const V3_SAVE_KEY = 'loop-shaft:save:v3';
 const V2_SAVE_KEY = 'loop-shaft:save:v2';
 const LEGACY_SAVE_KEY = 'loop-shaft:m1:v1';
 
-const DEPTHS: readonly DepthId[] = ['D-001', 'D-030', 'D-060', 'D-100'];
-const PHASE5_DEPTHS: readonly Phase5DepthId[] = ['D-001', 'D-030', 'D-060', 'D-100', 'D-180'];
+const DEPTHS: readonly DepthId[] = DEPTH_ORDER;
 const PROTOCOLS: readonly CoreProtocolId[] = [
   'EXPERIENCED_HANDS', 'CARGO_MEMORY', 'SHAFT_BLUEPRINT', 'VETERAN_ELEVATOR', 'SURVEY_ARCHIVE',
-  'CREW_MANIFEST', 'FREIGHT_MEMORY', 'LEGACY_LOCKER',
+  'CREW_MANIFEST', 'FREIGHT_MEMORY', 'LEGACY_LOCKER', 'RAIL_BLUEPRINT', 'FREIGHT_CHARTER',
+  'ENGINEER_LICENSE', 'BORE_MEMORY', 'DEEP_SURVEY_ARCHIVE',
 ];
-const PASSIVES: readonly PassiveId[] = ['PROSPECTORS_EYE', 'ELEVATOR_RHYTHM', 'FOSSIL_HUNTER', 'LONG_STRIDE', 'LAST_SWING'];
+const PASSIVES = ['PROSPECTORS_EYE', 'ELEVATOR_RHYTHM', 'FOSSIL_HUNTER', 'LONG_STRIDE', 'LAST_SWING'] as const;
 const RESEARCH_IDS: readonly ResearchId[] = [
   'DEEP_SURVEY', 'PRIORITY_CARGO_TAG', 'MULTI_STOP_RELAY', 'STRATA_SCANNER', 'CORE_RESONANCE',
-  'CREW_ROUTING', 'CARGO_SCHEDULER', 'ANCIENT_SURVEY', 'SALVAGE_ANALYSIS',
+  'CREW_ROUTING', 'CARGO_SCHEDULER', 'ANCIENT_SURVEY', 'SALVAGE_ANALYSIS', 'LOST_SURVEY',
+  'RAIL_LOGISTICS', 'FREIGHT_ARCHITECTURE', 'NULL_GEOMETRY', 'REMOTE_BORE_CONTROL', 'DEEP_SHAFT_GEOMETRY',
 ];
 const CREW_STATES: readonly CrewMemberState[] = [
   'IDLE', 'FIND_NODE', 'MOVING_TO_NODE', 'MINING', 'FIND_LOOT', 'MOVING_TO_LOOT', 'COLLECTING',
@@ -52,7 +61,18 @@ const MINER_PRIORITIES: readonly MinerPriority[] = ['RESEARCH', 'RARE', 'NEAREST
 const PORTER_PRIORITIES: readonly PorterPriority[] = ['CORE', 'RESEARCH', 'RELIC', 'RARE', 'VALUE', 'NEAREST'];
 const EQUIPMENT_SLOTS: readonly EquipmentSlot[] = ['TOOL', 'BOOTS', 'PACK', 'LAMP'];
 const EQUIPMENT_RARITIES: readonly EquipmentRarity[] = ['COMMON', 'RARE', 'EPIC', 'ANCIENT'];
-const AFFIX_IDS: readonly EquipmentAffixId[] = ['POWERED_EDGE', 'RESEARCH_PRISM', 'FOSSIL_BREAKER', 'LIGHT_FRAME', 'SURVEY_LAMP', 'CARGO_HOOK', 'CORE_TUNER'];
+const AFFIX_IDS: readonly EquipmentAffixId[] = [
+  'POWERED_EDGE', 'RESEARCH_PRISM', 'FOSSIL_BREAKER', 'LIGHT_FRAME', 'SURVEY_LAMP', 'CARGO_HOOK', 'CORE_TUNER',
+  'RAIL_SPIKES', 'COURIER_BOOTS', 'VOID_CUTTER', 'SURVEY_LAMP_MK2', 'LOAD_HOOK', 'BORE_COUPLER',
+];
+const LINE_STATES: readonly TransportLineState[] = ['BLUEPRINT', 'BUILDING', 'READY', 'JAMMED'];
+const RAIL_PRIORITIES: readonly RailPriority[] = ['BULK', 'RESEARCH', 'RARE', 'ANY'];
+const CART_STATES: readonly RailCartState[] = ['IDLE_AT_STOP', 'LOADING', 'TRAVELING_TO_HUB', 'UNLOADING', 'TRAVELING_TO_STOP', 'JAMMED'];
+const FREIGHT_STATES: readonly FreightCageState[] = ['UNBUILT', 'IDLE', 'REQUESTED', 'MOVING_TO_FLOOR', 'LOADING', 'ASCENDING', 'UNLOADING', 'DESCENDING', 'JAMMED'];
+const FREIGHT_PRIORITIES: readonly FreightPriority[] = ['BULK', 'BALANCED'];
+const ENGINEER_STATES: readonly EngineerState[] = ['LOCKED', 'IDLE', 'FIND_JOB', 'MOVING_TO_MACHINE', 'INSTALLING', 'REPAIRING', 'COMPLETE'];
+const ENGINEER_JOBS: readonly EngineerJobKind[] = ['RAIL_INSTALL', 'FREIGHT_INSTALL', 'BORE_INSTALL', 'JAM_RECOVERY', 'SHAFT_EXTENSION'];
+const BORE_STATES: readonly RemoteBoreState[] = ['BLUEPRINT', 'INSTALLING', 'IDLE', 'DRILLING', 'BLOCKED', 'JAMMED'];
 
 export function serializeGameState(state: GameState): string {
   return JSON.stringify({ ...state, events: [] });
@@ -61,8 +81,9 @@ export function serializeGameState(state: GameState): string {
 export function restoreGameState(serialized: string): GameState | null {
   try {
     const raw = JSON.parse(serialized) as Record<string, unknown>;
-    if (raw.version === 5) return restoreStructured(raw, true);
-    if (raw.version === 4) return restoreStructured(raw, false);
+    if (raw.version === 6) return restoreStructured(raw, true, true);
+    if (raw.version === 5) return restoreStructured(raw, true, false);
+    if (raw.version === 4) return restoreStructured(raw, false, false);
     if (raw.version === 1 || raw.version === 2 || raw.version === 3) return migrateLegacy(raw);
     return null;
   } catch {
@@ -70,7 +91,7 @@ export function restoreGameState(serialized: string): GameState | null {
   }
 }
 
-function restoreStructured(raw: Record<string, unknown>, hasPhase5: boolean): GameState | null {
+function restoreStructured(raw: Record<string, unknown>, hasPhase5: boolean, hasDeep: boolean): GameState | null {
   const rawMeta = asRecord(raw.meta);
   const rawRun = asRecord(raw.run);
   if (!rawMeta || !rawRun) return null;
@@ -83,9 +104,10 @@ function restoreStructured(raw: Record<string, unknown>, hasPhase5: boolean): Ga
     protocols: normalizeStringArray(rawMeta.protocols, PROTOCOLS),
     collection: normalizeCollection(rawMeta.collection, fallback.meta.collection),
     passives: normalizePassives(rawMeta.passives),
-    bestDepth: normalizeBestDepth(rawMeta.bestDepth, 'D-001') as DepthId,
+    bestDepth: normalizeDepth(rawMeta.bestDepth, 'D-001'),
     equipmentDiscoveries: normalizeLooseStringArray(rawMeta.equipmentDiscoveries),
     ancientDiscoveries: normalizeLooseStringArray(rawMeta.ancientDiscoveries),
+    deepDiscoveries: normalizeLooseStringArray(rawMeta.deepDiscoveries),
     legacyEquipment: normalizeEquipmentItem(rawMeta.legacyEquipment),
   };
   const base = createStateFromMeta(meta);
@@ -127,16 +149,15 @@ function restoreStructured(raw: Record<string, unknown>, hasPhase5: boolean): Ga
 
   const rawFloors = asRecord(rawRun.floors);
   if (rawFloors) {
-    for (const depth of PHASE5_DEPTHS) {
+    for (const depth of DEPTHS) {
       const saved = asRecord(rawFloors[depth]);
-      const fallbackFloor = (run.floors as Record<string, FloorState>)[depth];
-      if (saved && fallbackFloor) (run.floors as Record<string, FloorState>)[depth] = normalizeFloor(saved, fallbackFloor);
+      if (saved) run.floors[depth] = normalizeFloor(saved, run.floors[depth]);
     }
   }
   const rawDepth = asRecord(rawRun.depth);
   if (rawDepth) {
-    run.depth.current = normalizePhase5Depth(rawDepth.current, run.depth.current) as DepthId;
-    run.depth.unlocked = uniquePhase5Depths(rawDepth.unlocked, run.depth.current as Phase5DepthId) as DepthId[];
+    run.depth.current = normalizeDepth(rawDepth.current, run.depth.current);
+    run.depth.unlocked = uniqueDepths(rawDepth.unlocked, run.depth.current);
   }
   const anomaly = asRecord(rawRun.anomaly); if (anomaly) run.anomaly = { ...run.anomaly, ...(anomaly as Partial<typeof run.anomaly>) };
   const research = asRecord(rawRun.research);
@@ -154,11 +175,12 @@ function restoreStructured(raw: Record<string, unknown>, hasPhase5: boolean): Ga
   const chamber = asRecord(rawRun.coreChamber); if (chamber) run.coreChamber = { ...run.coreChamber, ...(chamber as Partial<typeof run.coreChamber>) };
   const discovery = asRecord(rawRun.discovery); if (discovery) run.discovery = { ...run.discovery, ...(discovery as Partial<typeof run.discovery>) };
   if (hasPhase5) normalizePhase5Run(run, rawRun.phase5);
+  if (hasDeep) normalizeDeepRun(run, rawRun);
 
   base.elapsed = Math.max(0, numberOr(raw.elapsed, 0));
   base.selection = null;
   base.events = [];
-  base.eventHistory = Array.isArray(raw.eventHistory) ? (raw.eventHistory as GameState['eventHistory']).slice(-260) : [];
+  base.eventHistory = Array.isArray(raw.eventHistory) ? (raw.eventHistory as GameState['eventHistory']).slice(-360) : [];
   base.nextEventId = Math.max(1, Math.floor(numberOr(raw.nextEventId, base.eventHistory.at(-1)?.id ? base.eventHistory.at(-1)!.id + 1 : 1)));
   normalizeEffectiveState(base);
   return base;
@@ -181,11 +203,11 @@ function normalizePhase5Run(run: GameState['run'], value: unknown): void {
     if (priority === 'BALANCED' || priority === 'CORE' || priority === 'RESEARCH' || priority === 'ANCIENT') run.phase5.cargo.priority = priority;
     const route = asRecord(rawCargo.route);
     run.phase5.cargo.route = route ? {
-      targetDepth: normalizePhase5Depth(route.targetDepth, 'D-001'),
+      targetDepth: normalizeDepth(route.targetDepth, 'D-001'),
       remaining: Math.max(0, numberOr(route.remaining, 0)),
       duration: Math.max(0.01, numberOr(route.duration, 2.4)),
     } : null;
-    run.phase5.cargo.lastServedDepth = rawCargo.lastServedDepth ? normalizePhase5Depth(rawCargo.lastServedDepth, 'D-001') : null;
+    run.phase5.cargo.lastServedDepth = rawCargo.lastServedDepth ? normalizeDepth(rawCargo.lastServedDepth, 'D-001') : null;
     run.phase5.cargo.deliveredLoads = Math.max(0, Math.floor(numberOr(rawCargo.deliveredLoads, 0)));
   }
   const rawEquipment = asRecord(raw.equipment);
@@ -213,7 +235,7 @@ function normalizePhase5Run(run: GameState['run'], value: unknown): void {
         seed: numberOr(drop.seed, 1) >>> 0 || 1,
         baseId: drop.baseId,
         slot,
-        sourceDepth: normalizePhase5Depth(drop.sourceDepth, 'D-180'),
+        sourceDepth: normalizeDepth(drop.sourceDepth, 'D-180'),
       }];
     }) : [];
   }
@@ -232,10 +254,160 @@ function normalizePhase5Run(run: GameState['run'], value: unknown): void {
   }
 }
 
+function normalizeDeepRun(run: GameState['run'], rawRunValue: unknown): void {
+  const rawRun = asRecord(rawRunValue);
+  if (!rawRun) return;
+  const rawLogistics = asRecord(rawRun.logistics);
+  if (rawLogistics) {
+    if (Array.isArray(rawLogistics.lines)) run.logistics.lines = rawLogistics.lines.flatMap((entry) => normalizeTransportLine(entry));
+    if (Array.isArray(rawLogistics.railCarts)) run.logistics.railCarts = rawLogistics.railCarts.flatMap((entry) => normalizeRailCart(entry));
+    if (Array.isArray(rawLogistics.cargoHubs)) run.logistics.cargoHubs = rawLogistics.cargoHubs.flatMap((entry) => normalizeCargoHub(entry));
+    const freight = asRecord(rawLogistics.freightCage);
+    if (freight) {
+      run.logistics.freightCage = {
+        ...run.logistics.freightCage,
+        state: normalizeAllowed(freight.state, FREIGHT_STATES, run.logistics.freightCage.state),
+        targetDepth: freight.targetDepth ? normalizeDepth(freight.targetDepth, 'D-250') : null,
+        position: clamp01(numberOr(freight.position, 0)),
+        maxLoad: Math.max(1, numberOr(freight.maxLoad, run.logistics.freightCage.maxLoad)),
+        moveSpeed: Math.max(0.01, numberOr(freight.moveSpeed, 1)),
+        stateTimer: Math.max(0, numberOr(freight.stateTimer, 0)),
+        cargo: normalizeLootArray(freight.cargo),
+        priority: normalizeAllowed(freight.priority, FREIGHT_PRIORITIES, 'BULK'),
+        buildProgress: Math.max(0, numberOr(freight.buildProgress, 0)),
+        requiredBuildProgress: Math.max(0.01, numberOr(freight.requiredBuildProgress, run.logistics.freightCage.requiredBuildProgress)),
+      };
+    }
+  }
+
+  const rawEngineer = asRecord(rawRun.engineer);
+  if (rawEngineer) {
+    const job = asRecord(rawEngineer.job);
+    run.engineer = {
+      ...run.engineer,
+      id: typeof rawEngineer.id === 'string' ? rawEngineer.id : run.engineer.id,
+      name: typeof rawEngineer.name === 'string' ? rawEngineer.name : run.engineer.name,
+      unlocked: Boolean(rawEngineer.unlocked),
+      state: normalizeAllowed(rawEngineer.state, ENGINEER_STATES, run.engineer.state),
+      assignedDepth: normalizeDepth(rawEngineer.assignedDepth, run.engineer.assignedDepth),
+      x: numberOr(rawEngineer.x, run.engineer.x),
+      moveSpeed: Math.max(1, numberOr(rawEngineer.moveSpeed, run.engineer.moveSpeed)),
+      job: job && typeof job.id === 'string' && typeof job.targetId === 'string' ? {
+        id: job.id,
+        kind: normalizeAllowed(job.kind, ENGINEER_JOBS, 'RAIL_INSTALL'),
+        targetId: job.targetId,
+        depth: normalizeDepth(job.depth, 'D-250'),
+        progress: Math.max(0, numberOr(job.progress, 0)),
+        requiredProgress: Math.max(0.01, numberOr(job.requiredProgress, 1)),
+      } : null,
+    };
+  }
+
+  const rawAutomation = asRecord(rawRun.deepAutomation);
+  if (rawAutomation && Array.isArray(rawAutomation.bores)) run.deepAutomation.bores = rawAutomation.bores.flatMap((entry) => normalizeBore(entry));
+
+  const rawDeep = asRecord(rawRun.deepProgress);
+  if (rawDeep) {
+    const instrumentation = asRecord(rawDeep.instrumentation);
+    run.deepProgress = {
+      ...run.deepProgress,
+      lostSignalFound: Boolean(rawDeep.lostSignalFound),
+      lostSampleDelivered: Boolean(rawDeep.lostSampleDelivered),
+      railPartsDelivered: Math.max(0, Math.floor(numberOr(rawDeep.railPartsDelivered, 0))),
+      nullSampleDelivered: Boolean(rawDeep.nullSampleDelivered),
+      deepComponentsDelivered: Math.max(0, Math.floor(numberOr(rawDeep.deepComponentsDelivered, 0))),
+      d250Unlocked: Boolean(rawDeep.d250Unlocked),
+      d400Unlocked: Boolean(rawDeep.d400Unlocked),
+      d650Unlocked: Boolean(rawDeep.d650Unlocked),
+      railBlueprint: Boolean(rawDeep.railBlueprint),
+      freightBlueprint: Boolean(rawDeep.freightBlueprint),
+      boreBlueprint: Boolean(rawDeep.boreBlueprint),
+      shaftConstructionStarted: Boolean(rawDeep.shaftConstructionStarted),
+      instrumentation: instrumentation ? {
+        runStartedAt: Math.max(0, numberOr(instrumentation.runStartedAt, run.deepProgress.instrumentation.runStartedAt)),
+        rebootAt: nullableNumber(instrumentation.rebootAt),
+        depthUnlockedAt: normalizeNumberMap(instrumentation.depthUnlockedAt, DEPTHS),
+        researchUnlockedAt: normalizeNumberMap(instrumentation.researchUnlockedAt, RESEARCH_IDS),
+        railUnlockedAt: nullableNumber(instrumentation.railUnlockedAt),
+        freightUnlockedAt: nullableNumber(instrumentation.freightUnlockedAt),
+        boreUnlockedAt: nullableNumber(instrumentation.boreUnlockedAt),
+        d650ReachedAt: nullableNumber(instrumentation.d650ReachedAt),
+      } : run.deepProgress.instrumentation,
+    };
+  }
+}
+
+function normalizeTransportLine(value: unknown): GameState['run']['logistics']['lines'] {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.id !== 'string') return [];
+  return [{
+    id: raw.id,
+    type: 'RAIL',
+    depth: normalizeDepth(raw.depth, 'D-250'),
+    from: typeof raw.from === 'string' ? raw.from : 'Rail Stop',
+    to: typeof raw.to === 'string' ? raw.to : 'Cargo Hub',
+    state: normalizeAllowed(raw.state, LINE_STATES, 'BLUEPRINT'),
+    capacity: Math.max(1, numberOr(raw.capacity, 20)),
+    priority: normalizeAllowed(raw.priority, RAIL_PRIORITIES, 'ANY'),
+    buildProgress: Math.max(0, numberOr(raw.buildProgress, 0)),
+    requiredBuildProgress: Math.max(0.01, numberOr(raw.requiredBuildProgress, 1)),
+    inputBuffer: normalizeLootArray(raw.inputBuffer),
+    outputBuffer: normalizeLootArray(raw.outputBuffer),
+    maxInputWeight: Math.max(1, numberOr(raw.maxInputWeight, 30)),
+    maxOutputWeight: Math.max(1, numberOr(raw.maxOutputWeight, 60)),
+    jamReason: typeof raw.jamReason === 'string' ? raw.jamReason : null,
+  }];
+}
+
+function normalizeRailCart(value: unknown): GameState['run']['logistics']['railCarts'] {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.id !== 'string' || typeof raw.lineId !== 'string') return [];
+  return [{
+    id: raw.id,
+    lineId: raw.lineId,
+    position: clamp01(numberOr(raw.position, 0)),
+    state: normalizeAllowed(raw.state, CART_STATES, 'IDLE_AT_STOP'),
+    stateTimer: Math.max(0, numberOr(raw.stateTimer, 0)),
+    cargo: normalizeLootArray(raw.cargo),
+  }];
+}
+
+function normalizeCargoHub(value: unknown): GameState['run']['logistics']['cargoHubs'] {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.id !== 'string') return [];
+  return [{
+    id: raw.id,
+    depth: normalizeDepth(raw.depth, 'D-250'),
+    buffer: normalizeLootArray(raw.buffer),
+    maxWeight: Math.max(1, numberOr(raw.maxWeight, 60)),
+  }];
+}
+
+function normalizeBore(value: unknown): GameState['run']['deepAutomation']['bores'] {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.id !== 'string' || typeof raw.siteId !== 'string') return [];
+  return [{
+    id: raw.id,
+    depth: normalizeDepth(raw.depth, 'D-400'),
+    siteId: raw.siteId,
+    targetNodeId: typeof raw.targetNodeId === 'string' ? raw.targetNodeId : null,
+    state: normalizeAllowed(raw.state, BORE_STATES, 'BLUEPRINT'),
+    cycleProgress: Math.max(0, numberOr(raw.cycleProgress, 0)),
+    cycleDuration: Math.max(0.01, numberOr(raw.cycleDuration, 1)),
+    hitAt: Math.max(0, numberOr(raw.hitAt, 0.5)),
+    damage: Math.max(1, numberOr(raw.damage, 1)),
+    outputBuffer: normalizeLootArray(raw.outputBuffer),
+    maxOutputWeight: Math.max(1, numberOr(raw.maxOutputWeight, 20)),
+    connectedLineId: typeof raw.connectedLineId === 'string' ? raw.connectedLineId : null,
+    installProgress: Math.max(0, numberOr(raw.installProgress, 0)),
+    requiredInstallProgress: Math.max(0.01, numberOr(raw.requiredInstallProgress, 1)),
+  }];
+}
+
 function normalizeCrewMember(value: unknown): CrewMember[] {
   const raw = asRecord(value);
   if (!raw || typeof raw.id !== 'string') return [];
-  const role: CrewRole = raw.role === 'PORTER' ? 'PORTER' : raw.role === 'MINER' ? 'MINER' : 'MINER';
+  const role: CrewRole = raw.role === 'PORTER' ? 'PORTER' : 'MINER';
   const rawBody = asRecord(raw.body);
   const state = typeof raw.state === 'string' && CREW_STATES.includes(raw.state as CrewMemberState) ? raw.state as CrewMemberState : role === 'MINER' ? 'FIND_NODE' : 'FIND_LOOT';
   const travel = asRecord(raw.travel);
@@ -244,8 +416,8 @@ function normalizeCrewMember(value: unknown): CrewMember[] {
     id: raw.id,
     name: typeof raw.name === 'string' ? raw.name : raw.id,
     role,
-    assignedDepth: normalizePhase5Depth(raw.assignedDepth, 'D-001'),
-    pendingDepth: raw.pendingDepth ? normalizePhase5Depth(raw.pendingDepth, 'D-001') : null,
+    assignedDepth: normalizeDepth(raw.assignedDepth, 'D-001'),
+    pendingDepth: raw.pendingDepth ? normalizeDepth(raw.pendingDepth, 'D-001') : null,
     state,
     body: {
       x: numberOr(rawBody?.x, 240),
@@ -263,8 +435,8 @@ function normalizeCrewMember(value: unknown): CrewMember[] {
     minerPriority: typeof raw.minerPriority === 'string' && MINER_PRIORITIES.includes(raw.minerPriority as MinerPriority) ? raw.minerPriority as MinerPriority : 'ANY',
     porterPriority: typeof raw.porterPriority === 'string' && PORTER_PRIORITIES.includes(raw.porterPriority as PorterPriority) ? raw.porterPriority as PorterPriority : 'NEAREST',
     travel: travel ? {
-      from: normalizePhase5Depth(travel.from, 'D-001'),
-      to: normalizePhase5Depth(travel.to, 'D-001'),
+      from: normalizeDepth(travel.from, 'D-001'),
+      to: normalizeDepth(travel.to, 'D-001'),
       remaining: Math.max(0, numberOr(travel.remaining, 0)),
       duration: Math.max(0.01, numberOr(travel.duration, 3.4)),
     } : null,
@@ -324,7 +496,7 @@ function normalizeOfflineReport(value: unknown): OfflineReport | null {
       const row = asRecord(entry);
       if (!row) return [];
       return [{
-        depth: normalizePhase5Depth(row.depth, 'D-001'),
+        depth: normalizeDepth(row.depth, 'D-001'),
         loads: Math.max(0, Math.floor(numberOr(row.loads, 0))),
         data: Math.max(0, Math.floor(numberOr(row.data, 0))),
         scrap: Math.max(0, Math.floor(numberOr(row.scrap, 0))),
@@ -367,7 +539,7 @@ function migrateLegacy(raw: Record<string, unknown>): GameState | null {
   state.meta.passives = normalizePassives(raw.passives);
   state.meta.bestDepth = safeFloorId;
   state.elapsed = Math.max(0, numberOr(raw.elapsed, 0));
-  state.eventHistory = Array.isArray(raw.eventHistory) ? (raw.eventHistory as GameState['eventHistory']).slice(-260) : [];
+  state.eventHistory = Array.isArray(raw.eventHistory) ? (raw.eventHistory as GameState['eventHistory']).slice(-360) : [];
   state.nextEventId = Math.max(1, Math.floor(numberOr(raw.nextEventId, state.eventHistory.at(-1)?.id ? state.eventHistory.at(-1)!.id + 1 : 1)));
   state.run.nextLootId = Math.max(1, Math.floor(numberOr(raw.nextLootId, 1)));
   normalizeEffectiveState(state);
@@ -394,6 +566,7 @@ function normalizeNode(value: unknown, fallback: MiningNode): MiningNode {
     treasureChance: typeof saved.treasureChance === 'number' ? saved.treasureChance : numberOr(saved.rareChance, fallback.treasureChance),
     researchWeight: numberOr(saved.researchWeight, fallback.researchWeight),
     coreWeight: numberOr(saved.coreWeight, fallback.coreWeight),
+    access: saved.access === 'REMOTE_ONLY' ? 'REMOTE_ONLY' : fallback.access,
   };
 }
 
@@ -405,7 +578,7 @@ function normalizeLootArray(value: unknown): LootStack[] {
     const kind = normalizeLootKind(saved.kind);
     if (!kind) return [];
     const definition = LOOT[kind];
-    const originDepth = saved.originDepth ? normalizePhase5Depth(saved.originDepth, 'D-001') : undefined;
+    const originDepth = saved.originDepth ? normalizeDepth(saved.originDepth, 'D-001') : undefined;
     return [{
       id: typeof saved.id === 'string' ? saved.id : 'loot-migrated',
       kind,
@@ -458,27 +631,45 @@ function normalizeLootKind(value: unknown): LootKind | null {
   if (value === 'FOSSIL') return 'TRILOBITE';
   return typeof value === 'string' && value in LOOT ? value as LootKind : null;
 }
+
 function normalizeDepth(value: unknown, fallback: DepthId): DepthId {
   return typeof value === 'string' && DEPTHS.includes(value as DepthId) ? value as DepthId : fallback;
 }
-function normalizePhase5Depth(value: unknown, fallback: Phase5DepthId): Phase5DepthId {
-  return typeof value === 'string' && PHASE5_DEPTHS.includes(value as Phase5DepthId) ? value as Phase5DepthId : fallback;
-}
-function normalizeBestDepth(value: unknown, fallback: Phase5DepthId): Phase5DepthId { return normalizePhase5Depth(value, fallback); }
-function uniquePhase5Depths(value: unknown, current: Phase5DepthId): Phase5DepthId[] {
-  const depths = normalizeStringArray(value, PHASE5_DEPTHS);
+
+function uniqueDepths(value: unknown, current: DepthId): DepthId[] {
+  const depths = normalizeStringArray(value, DEPTHS);
   if (!depths.includes('D-001')) depths.unshift('D-001');
   if (!depths.includes(current)) depths.push(current);
-  return PHASE5_DEPTHS.filter((depth) => depths.includes(depth));
+  return DEPTHS.filter((depth) => depths.includes(depth));
 }
+
 function normalizeStringArray<T extends string>(value: unknown, allowed: readonly T[]): T[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is T => typeof item === 'string' && allowed.includes(item as T)))];
 }
+
 function normalizeLooseStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.length > 0))];
 }
+
+function normalizeAllowed<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && allowed.includes(value as T) ? value as T : fallback;
+}
+
+function normalizeNumberMap<T extends string>(value: unknown, allowed: readonly T[]): Partial<Record<T, number>> {
+  const raw = asRecord(value);
+  if (!raw) return {};
+  const result: Partial<Record<T, number>> = {};
+  for (const key of allowed) if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) result[key] = Math.max(0, raw[key] as number);
+  return result;
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : null;
+}
+
+function clamp01(value: number): number { return Math.max(0, Math.min(1, value)); }
 function asRecord(value: unknown): Record<string, unknown> | null { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 function numberOr(value: unknown, fallback: number): number { return typeof value === 'number' && Number.isFinite(value) ? value : fallback; }
 
@@ -498,13 +689,15 @@ export function saveToStorage(state: GameState): void {
   state.run.phase5.offline.savedAt = Date.now();
   localStorage.setItem(SAVE_KEY, serializeGameState(state));
 }
+
 export function loadFromStorage(): GameState | null {
-  for (const key of [SAVE_KEY, V4_SAVE_KEY, V3_SAVE_KEY, V2_SAVE_KEY, LEGACY_SAVE_KEY]) {
+  for (const key of [SAVE_KEY, V5_SAVE_KEY, V4_SAVE_KEY, V3_SAVE_KEY, V2_SAVE_KEY, LEGACY_SAVE_KEY]) {
     const serialized = localStorage.getItem(key);
     if (serialized) return restoreGameState(serialized);
   }
   return null;
 }
+
 export function clearSave(): void {
-  for (const key of [SAVE_KEY, V4_SAVE_KEY, V3_SAVE_KEY, V2_SAVE_KEY, LEGACY_SAVE_KEY]) localStorage.removeItem(key);
+  for (const key of [SAVE_KEY, V5_SAVE_KEY, V4_SAVE_KEY, V3_SAVE_KEY, V2_SAVE_KEY, LEGACY_SAVE_KEY]) localStorage.removeItem(key);
 }
