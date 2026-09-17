@@ -243,7 +243,7 @@ describe('Milestone 4 — multiple floors, research and first reboot', () => {
     expect(state.run.anomaly.options).toEqual(options);
   });
 
-  it('migrates a v3 save into v4 Run/Meta structure', () => {
+  it('migrates a v3 save into v5 Run/Meta structure', () => {
     const legacy = createGameState(1010);
     const rawV3 = {
       version: 3,
@@ -271,7 +271,7 @@ describe('Milestone 4 — multiple floors, research and first reboot', () => {
       nextLootId: 1,
     };
     const migrated = restoreGameState(JSON.stringify(rawV3))!;
-    expect(migrated.version).toBe(4);
+    expect(migrated.version).toBe(5);
     expect(migrated.run.scrap).toBe(1234);
     expect(migrated.meta.runIndex).toBe(1);
     expect(migrated.run.depth.current).toBe('D-001');
