@@ -2,10 +2,12 @@ import {
   BASE_ELEVATOR_CAPACITY,
   BASE_ELEVATOR_SPEED,
   COLLECTIBLE_KINDS,
+  CREW_MINER_MOVE_SPEED,
   createD001Nodes,
   createD030Nodes,
   createD060Nodes,
   createD100Nodes,
+  createD180Nodes,
   LOOT,
   PLAYER_MOVE_SPEED,
   PLAYER_PACK_CAPACITY,
@@ -14,7 +16,7 @@ import {
   WORLD,
 } from './config';
 import { hashSeed } from './rng';
-import type { DepthId, FloorState, GameState, MetaProgression, RunState } from './types';
+import type { CrewMember, DepthId, FloorState, GameState, MetaProgression, Phase5RunState, RunState } from './types';
 
 export function createGameState(seed = createMetaSeed()): GameState {
   const metaSeed = seed >>> 0 || 1;
@@ -35,13 +37,16 @@ export function createGameState(seed = createMetaSeed()): GameState {
     },
     passives: { unlocked: [], active: [] },
     bestDepth: 'D-001',
+    equipmentDiscoveries: [],
+    ancientDiscoveries: [],
+    legacyEquipment: null,
   };
   return createStateFromMeta(meta);
 }
 
 export function createStateFromMeta(meta: MetaProgression): GameState {
   return {
-    version: 4,
+    version: 5,
     elapsed: 0,
     run: createNewRun(meta),
     meta,
@@ -59,6 +64,7 @@ export function createNewRun(meta: MetaProgression): RunState {
   const veteranElevator = meta.protocols.includes('VETERAN_ELEVATOR');
   const surveyArchive = meta.protocols.includes('SURVEY_ARCHIVE');
   const floors = createFloors(seed);
+  const phase5 = createPhase5Run(meta, seed);
 
   return {
     seed,
@@ -81,11 +87,11 @@ export function createNewRun(meta: MetaProgression): RunState {
       loadingTimer: 0,
     },
     porter: {
-      enabled: cargoMemory,
+      enabled: cargoMemory && !phase5.crew.unlocked,
       x: WORLD.elevatorX + 28,
       y: WORLD.floorY - 8,
       facing: 1,
-      state: cargoMemory ? 'FIND_LOOT' : 'IDLE',
+      state: cargoMemory && !phase5.crew.unlocked ? 'FIND_LOOT' : 'IDLE',
       targetLootId: null,
       moveSpeed: PORTER_MOVE_SPEED,
       capacity: PORTER_CAPACITY,
@@ -129,8 +135,81 @@ export function createNewRun(meta: MetaProgression): RunState {
       firstRelicBreak: 8 + (hashSeed(seed ^ 0x5e11c) % 4),
       firstResearchBreak: 2 + (hashSeed(seed ^ 0xd060da7a) % 3),
     },
+    phase5,
     nextLootId: 1,
   };
+}
+
+function createPhase5Run(meta: MetaProgression, seed: number): Phase5RunState {
+  const crewManifest = meta.protocols.includes('CREW_MANIFEST');
+  const freightMemory = meta.protocols.includes('FREIGHT_MEMORY');
+  const legacyLocker = meta.protocols.includes('LEGACY_LOCKER');
+  const members: CrewMember[] = crewManifest ? [createInitialMiner()] : [];
+  const legacy = legacyLocker && meta.legacyEquipment ? structuredCloneEquipment(meta.legacyEquipment) : null;
+  return {
+    crew: {
+      unlocked: crewManifest,
+      slots: crewManifest ? 2 : 0,
+      members,
+      nextCrewId: crewManifest ? 2 : 1,
+    },
+    cargo: {
+      unlocked: freightMemory,
+      priority: 'BALANCED',
+      route: null,
+      lastServedDepth: null,
+      deliveredLoads: 0,
+    },
+    equipment: {
+      inventory: legacy ? [legacy] : [],
+      equippedPlayer: legacy ? { [legacy.slot]: legacy.id } : {},
+      drops: [],
+      nextItemId: 1,
+    },
+    ancient: {
+      signalFound: false,
+      pushCommitted: false,
+      unlocked: false,
+      discoveries: [],
+    },
+    offline: {
+      savedAt: 0,
+      processedAt: 0,
+      lastReport: null,
+    },
+  };
+}
+
+function createInitialMiner(): CrewMember {
+  return {
+    id: 'crew-1',
+    name: 'MINER 01',
+    role: 'MINER',
+    assignedDepth: 'D-001',
+    pendingDepth: null,
+    state: 'FIND_NODE',
+    body: {
+      x: WORLD.elevatorX - 34,
+      y: WORLD.floorY - 8,
+      facing: -1,
+      moveSpeed: CREW_MINER_MOVE_SPEED,
+      carried: [],
+    },
+    targetNodeId: null,
+    targetLootId: null,
+    swing: null,
+    collectTimer: 0,
+    loadingTimer: 0,
+    capacity: 0,
+    minerPriority: 'ANY',
+    porterPriority: 'NEAREST',
+    travel: null,
+    equipment: {},
+  };
+}
+
+function structuredCloneEquipment<T extends MetaProgression['legacyEquipment']>(item: T): T {
+  return item ? { ...item, affixes: item.affixes.map((affix) => ({ ...affix })) } as T : item;
 }
 
 export function deriveRunSeed(metaSeed: number, runIndex: number): number {
@@ -139,16 +218,18 @@ export function deriveRunSeed(metaSeed: number, runIndex: number): number {
 }
 
 function createFloors(runSeed: number): Record<DepthId, FloorState> {
-  return {
+  const floors: Record<DepthId, FloorState> = {
     'D-001': floor('D-001', runSeed, 0xd001, createD001Nodes()),
     'D-030': floor('D-030', runSeed, 0xd030, createD030Nodes()),
     'D-060': floor('D-060', runSeed, 0xd060, createD060Nodes()),
     'D-100': floor('D-100', runSeed, 0xd100, createD100Nodes()),
   };
+  (floors as Record<string, FloorState>)['D-180'] = floor('D-180' as DepthId, runSeed, 0xd180, createD180Nodes());
+  return floors;
 }
 
 function floor(id: DepthId, runSeed: number, salt: number, nodes: FloorState['nodes']): FloorState {
-  return { id, seed: hashSeed(runSeed ^ salt), nodes, loot: [] };
+  return { id, seed: hashSeed(runSeed ^ salt), nodes, loot: [], cargo: [] };
 }
 
 export function createMetaSeed(): number {
