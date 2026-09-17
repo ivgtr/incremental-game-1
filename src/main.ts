@@ -330,8 +330,9 @@ function renderDom(): void {
     setHtml(context, contextMarkup('Central Elevator', `${travel.from} → ${travel.to} · ${travel.remaining.toFixed(1)}s`, ''));
     return;
   }
-  if (state.selection?.type === 'node') {
-    const node = currentFloor(state).nodes.find((candidate) => candidate.id === state.selection?.id);
+  const selection = state.selection;
+  if (selection?.type === 'node') {
+    const node = currentFloor(state).nodes.find((candidate) => candidate.id === selection.id);
     if (node) renderNodeContext(node);
     return;
   }
