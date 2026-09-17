@@ -64,7 +64,7 @@ export function createNewRun(meta: MetaProgression): RunState {
   const veteranElevator = meta.protocols.includes('VETERAN_ELEVATOR');
   const surveyArchive = meta.protocols.includes('SURVEY_ARCHIVE');
   const floors = createFloors(seed);
-  const phase5 = createPhase5Run(meta, seed);
+  const phase5 = createPhase5Run(meta);
 
   return {
     seed,
@@ -140,7 +140,7 @@ export function createNewRun(meta: MetaProgression): RunState {
   };
 }
 
-function createPhase5Run(meta: MetaProgression, seed: number): Phase5RunState {
+function createPhase5Run(meta: MetaProgression): Phase5RunState {
   const crewManifest = meta.protocols.includes('CREW_MANIFEST');
   const freightMemory = meta.protocols.includes('FREIGHT_MEMORY');
   const legacyLocker = meta.protocols.includes('LEGACY_LOCKER');
