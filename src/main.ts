@@ -29,7 +29,6 @@ import {
   canUnlockD250,
   canUnlockD400,
   installBore,
-  processDeepEvents,
   setFreightPriority,
   setRailPriority,
   startD650Construction,
@@ -37,7 +36,6 @@ import {
   startRailConstruction,
   unlockD250,
   unlockD400,
-  updateDeepGame,
 } from './game/deepGame';
 import {
   applyOfflineProgress,
@@ -279,16 +277,13 @@ function frame(now: number): void {
   while (accumulator >= FIXED_STEP) {
     updateGame(state, FIXED_STEP);
     updatePhase5(state, FIXED_STEP);
-    updateDeepGame(state, FIXED_STEP);
     state.meta.bestDepth = deeperDepth(state.meta.bestDepth, state.run.depth.current);
     accumulator -= FIXED_STEP;
   }
   const baseEvents = drainEvents(state);
   processPhase5Events(state, baseEvents);
   const phase5Events = drainEvents(state);
-  processDeepEvents(state, [...baseEvents, ...phase5Events]);
-  const deepEvents = drainEvents(state);
-  const events = [...baseEvents, ...phase5Events, ...deepEvents];
+  const events = [...baseEvents, ...phase5Events];
   for (const gameEvent of events) {
     renderer.handleEvent(gameEvent, state, now);
     audio.handle(gameEvent);
