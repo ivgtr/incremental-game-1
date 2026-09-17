@@ -1,0 +1,1002 @@
+import {
+  ANOMALY_KINDS,
+  CARGO_ROUTE_DURATION,
+  COLLECT_DURATION,
+  CORE_KINDS,
+  CREW_BOARD_COST,
+  CREW_MINER_MOVE_SPEED,
+  CREW_PORTER_CAPACITY,
+  CREW_PORTER_MOVE_SPEED,
+  CREW_SLOT_COSTS,
+  CREW_TRAVEL_DURATION,
+  D180_EXTENSION_COST,
+  FOSSIL_KINDS,
+  LOOT,
+  OFFLINE_CAP_SECONDS,
+  OFFLINE_STEP_SECONDS,
+  PLAYER_PACK_CAPACITY,
+  PORTER_COLLECT_DURATION,
+  RESEARCH_KINDS,
+  RELIC_KINDS,
+  SWING,
+  VALUABLE_KINDS,
+  WORLD,
+} from './config';
+import { getModifiers } from './modifiers';
+import { hashSeed, nextRandom, pick } from './rng';
+import {
+  armReboot,
+  canTravelToDepth,
+  cargoWeight,
+  drainEvents,
+  effectiveTreasureChance,
+  requestFloorTravel,
+  sendElevator,
+  updateGame,
+} from './simulation';
+import type {
+  CargoRoutingPriority,
+  CrewMember,
+  CrewRole,
+  DepthId,
+  EquipmentAffix,
+  EquipmentAffixId,
+  EquipmentItem,
+  EquipmentRarity,
+  EquipmentSlot,
+  FloorState,
+  GameEvent,
+  GameEventType,
+  GameState,
+  LootCategory,
+  LootKind,
+  LootStack,
+  MinerPriority,
+  MiningNode,
+  OfflineReport,
+  Phase5DepthId,
+  PorterPriority,
+  Rarity,
+  WorkerBody,
+} from './types';
+
+const NODE_STOP_DISTANCE = 13;
+const CARGO_POINT_X = WORLD.elevatorX + 48;
+const D180 = 'D-180' as const;
+const EQUIPMENT_RARITY_RANK: Record<EquipmentRarity, number> = { COMMON: 0, RARE: 1, EPIC: 2, ANCIENT: 3 };
+const LOOT_RARITY_RANK: Record<Rarity, number> = { COMMON: 0, UNCOMMON: 1, RARE: 2, EPIC: 3, RELIC: 4, ANOMALY: 5 };
+
+export function phase5Floor(state: GameState, depth: Phase5DepthId): FloorState {
+  return (state.run.floors as Record<string, FloorState>)[depth]!;
+}
+
+export function unlockedPhase5Depths(state: GameState): Phase5DepthId[] {
+  return [...state.run.depth.unlocked] as Phase5DepthId[];
+}
+
+export function isD180Unlocked(state: GameState): boolean {
+  return unlockedPhase5Depths(state).includes(D180);
+}
+
+export function canShowCrewBoard(state: GameState): boolean {
+  return state.meta.runIndex > 1 && (state.run.depth.unlocked.includes('D-060') || state.meta.protocols.includes('CREW_MANIFEST'));
+}
+
+export function selectCrewBoard(state: GameState): boolean {
+  if (!canShowCrewBoard(state)) return false;
+  state.selection = { type: 'crew-board' };
+  return true;
+}
+
+export function canUnlockCrewOperations(state: GameState): boolean {
+  const run = state.run;
+  if (run.phase5.crew.unlocked) return false;
+  if (state.meta.runIndex < 2) return false;
+  if (!run.research.completed.includes('CREW_ROUTING') || !run.research.completed.includes('CARGO_SCHEDULER')) return false;
+  if (!run.porter.enabled || run.porter.carried.length > 0 || run.porter.state === 'LOADING') return false;
+  return run.scrap >= CREW_BOARD_COST;
+}
+
+export function unlockCrewOperations(state: GameState): boolean {
+  if (!canUnlockCrewOperations(state)) return false;
+  const run = state.run;
+  run.scrap -= CREW_BOARD_COST;
+  const crew = run.phase5.crew;
+  crew.unlocked = true;
+  crew.slots = Math.max(2, crew.slots);
+  if (!crew.members.some((member) => member.role === 'MINER')) crew.members.push(createCrewMember(state, 'MINER', run.depth.current as Phase5DepthId));
+  if (!crew.members.some((member) => member.role === 'PORTER')) {
+    const porter = createCrewMember(state, 'PORTER', run.depth.current as Phase5DepthId);
+    porter.body.x = run.porter.x;
+    porter.body.facing = run.porter.facing;
+    crew.members.push(porter);
+  }
+  run.porter.enabled = false;
+  run.porter.state = 'IDLE';
+  run.porter.targetLootId = null;
+  run.phase5.cargo.unlocked = true;
+  emit(state, 'CREW_HIRED', { crew: crew.members.length, slots: crew.slots, convertedPorter: true });
+  return true;
+}
+
+export function expandCrewSlots(state: GameState): boolean {
+  const crew = state.run.phase5.crew;
+  if (!crew.unlocked || crew.slots >= 4) return false;
+  const cost = CREW_SLOT_COSTS[crew.slots] ?? 5200;
+  if (state.run.scrap < cost) return false;
+  state.run.scrap -= cost;
+  crew.slots += 1;
+  return true;
+}
+
+export function hireCrew(state: GameState, role: CrewRole): boolean {
+  const crew = state.run.phase5.crew;
+  if (!crew.unlocked || crew.members.length >= crew.slots) return false;
+  const cost = role === 'MINER' ? 2600 : 2200;
+  if (state.run.scrap < cost) return false;
+  state.run.scrap -= cost;
+  const member = createCrewMember(state, role, state.run.depth.current as Phase5DepthId);
+  crew.members.push(member);
+  emit(state, 'CREW_HIRED', { crewId: member.id, role, cost });
+  return true;
+}
+
+function createCrewMember(state: GameState, role: CrewRole, depth: Phase5DepthId): CrewMember {
+  const idNumber = state.run.phase5.crew.nextCrewId++;
+  const roleIndex = state.run.phase5.crew.members.filter((member) => member.role === role).length + 1;
+  return {
+    id: `crew-${idNumber}`,
+    name: `${role} ${String(roleIndex).padStart(2, '0')}`,
+    role,
+    assignedDepth: depth,
+    pendingDepth: null,
+    state: role === 'MINER' ? 'FIND_NODE' : 'FIND_LOOT',
+    body: {
+      x: role === 'MINER' ? WORLD.elevatorX - 34 : WORLD.elevatorX + 34,
+      y: WORLD.floorY - 8,
+      facing: role === 'MINER' ? -1 : 1,
+      moveSpeed: role === 'MINER' ? CREW_MINER_MOVE_SPEED : CREW_PORTER_MOVE_SPEED,
+      carried: [],
+    },
+    targetNodeId: null,
+    targetLootId: null,
+    swing: null,
+    collectTimer: 0,
+    loadingTimer: 0,
+    capacity: role === 'PORTER' ? CREW_PORTER_CAPACITY : 0,
+    minerPriority: 'ANY',
+    porterPriority: 'NEAREST',
+    travel: null,
+    equipment: {},
+  };
+}
+
+export function assignCrew(state: GameState, crewId: string, depth: Phase5DepthId): boolean {
+  const member = state.run.phase5.crew.members.find((candidate) => candidate.id === crewId);
+  if (!member || !state.run.phase5.crew.unlocked) return false;
+  if (!unlockedPhase5Depths(state).includes(depth) || member.assignedDepth === depth || member.pendingDepth) return false;
+  if (member.body.carried.length > 0 || member.state === 'DEPOSITING' || member.state === 'TRAVELING') return false;
+  member.pendingDepth = depth;
+  member.targetNodeId = null;
+  member.targetLootId = null;
+  member.swing = null;
+  member.state = 'MOVING_TO_ELEVATOR';
+  member.body.facing = WORLD.elevatorX >= member.body.x ? 1 : -1;
+  emit(state, 'CREW_ASSIGNED', { crewId, role: member.role, from: member.assignedDepth, to: depth });
+  return true;
+}
+
+export function setMinerPriority(state: GameState, crewId: string, priority: MinerPriority): boolean {
+  const member = state.run.phase5.crew.members.find((candidate) => candidate.id === crewId && candidate.role === 'MINER');
+  if (!member) return false;
+  member.minerPriority = priority;
+  member.targetNodeId = null;
+  if (!member.pendingDepth && member.state !== 'TRAVELING' && member.state !== 'MOVING_TO_ELEVATOR') member.state = 'FIND_NODE';
+  emit(state, 'CREW_TASK_SELECTED', { crewId, role: member.role, priority });
+  return true;
+}
+
+export function setPorterPriority(state: GameState, crewId: string, priority: PorterPriority): boolean {
+  const member = state.run.phase5.crew.members.find((candidate) => candidate.id === crewId && candidate.role === 'PORTER');
+  if (!member) return false;
+  member.porterPriority = priority;
+  member.targetLootId = null;
+  if (!member.pendingDepth && member.body.carried.length === 0 && member.state !== 'TRAVELING' && member.state !== 'MOVING_TO_ELEVATOR') member.state = 'FIND_LOOT';
+  emit(state, 'CREW_TASK_SELECTED', { crewId, role: member.role, priority });
+  return true;
+}
+
+export function setCargoPriority(state: GameState, priority: CargoRoutingPriority): boolean {
+  if (!state.run.phase5.cargo.unlocked) return false;
+  state.run.phase5.cargo.priority = priority;
+  return true;
+}
+
+export function updatePhase5(state: GameState, dt: number): void {
+  const step = Math.max(0, Math.min(dt, 0.1));
+  updateAncientSignal(state);
+  updateCrew(state, step);
+  updateCargoNetwork(state, step);
+}
+
+function updateAncientSignal(state: GameState): void {
+  const ancient = state.run.phase5.ancient;
+  if (ancient.signalFound || state.run.depth.current !== 'D-100') return;
+  if (!state.run.coreChamber.rebootAvailable || !state.run.research.completed.includes('ANCIENT_SURVEY')) return;
+  ancient.signalFound = true;
+  emit(state, 'D180_SIGNAL_FOUND', { depth: 'D-180', pendingCore: state.run.pendingCore });
+}
+
+function updateCrew(state: GameState, dt: number): void {
+  if (!state.run.phase5.crew.unlocked) return;
+  for (const member of state.run.phase5.crew.members) {
+    updateCrewMovementParameters(state, member);
+    if (member.state === 'MOVING_TO_ELEVATOR' || member.state === 'TRAVELING') {
+      updateCrewTravel(state, member, dt);
+      continue;
+    }
+    if (member.role === 'MINER') updateCrewMiner(state, member, dt);
+    else updateCrewPorter(state, member, dt);
+  }
+}
+
+function updateCrewMovementParameters(state: GameState, member: CrewMember): void {
+  let speed = member.role === 'MINER' ? CREW_MINER_MOVE_SPEED : CREW_PORTER_MOVE_SPEED;
+  if (state.run.anomaly.selected === 'HEAVY_WORLD') speed *= member.role === 'MINER' ? 0.72 : 0.58;
+  const tool = member.equipment.TOOL ? state.run.phase5.equipment.inventory.find((item) => item.id === member.equipment.TOOL) : undefined;
+  if (tool) {
+    const light = tool.affixes.find((affix) => affix.id === 'LIGHT_FRAME');
+    if (light) speed *= 1 + light.value;
+  }
+  member.body.moveSpeed = speed;
+}
+
+function updateCrewTravel(state: GameState, member: CrewMember, dt: number): void {
+  if (member.state === 'MOVING_TO_ELEVATOR') {
+    member.body.facing = WORLD.elevatorX >= member.body.x ? 1 : -1;
+    if (!moveToward(member.body, WORLD.elevatorX + (member.role === 'MINER' ? -10 : 10), dt)) return;
+    if (!canUseElevatorForCrew(state, member.id) || !member.pendingDepth) return;
+    const duration = CREW_TRAVEL_DURATION + depthDistance(member.assignedDepth, member.pendingDepth) * 0.008;
+    member.travel = { from: member.assignedDepth, to: member.pendingDepth, remaining: duration, duration };
+    member.state = 'TRAVELING';
+    state.run.elevator.state = 'TRAVELING';
+    state.run.elevator.position = 0;
+    emit(state, 'CREW_TRAVEL_STARTED', { crewId: member.id, from: member.assignedDepth, to: member.pendingDepth, duration });
+    return;
+  }
+  const travel = member.travel;
+  if (!travel) {
+    member.state = member.role === 'MINER' ? 'FIND_NODE' : 'FIND_LOOT';
+    return;
+  }
+  travel.remaining = Math.max(0, travel.remaining - dt);
+  const progress = 1 - travel.remaining / travel.duration;
+  state.run.elevator.position = Math.sin(progress * Math.PI) * 0.28;
+  if (travel.remaining > 0) return;
+  member.assignedDepth = travel.to;
+  member.pendingDepth = null;
+  member.travel = null;
+  member.body.x = WORLD.elevatorX + (member.role === 'MINER' ? -32 : 32);
+  member.body.facing = member.role === 'MINER' ? -1 : 1;
+  member.state = member.role === 'MINER' ? 'FIND_NODE' : 'FIND_LOOT';
+  state.run.elevator.state = 'IDLE_BOTTOM';
+  state.run.elevator.position = 0;
+  state.run.elevator.stateTimer = 0;
+  emit(state, 'CREW_ARRIVED', { crewId: member.id, depth: member.assignedDepth, role: member.role });
+}
+
+function canUseElevatorForCrew(state: GameState, crewId: string): boolean {
+  const run = state.run;
+  if (run.elevator.state !== 'IDLE_BOTTOM' || run.elevator.travel || run.elevator.cargo.length > 0 || run.phase5.cargo.route) return false;
+  if (run.character.state === 'LOADING' || run.porter.state === 'LOADING') return false;
+  return !run.phase5.crew.members.some((member) => member.id !== crewId && member.state === 'TRAVELING');
+}
+
+function updateCrewMiner(state: GameState, member: CrewMember, dt: number): void {
+  const floor = phase5Floor(state, member.assignedDepth);
+  if (!floor || (member.assignedDepth === 'D-030' && !state.run.anomaly.selected)) return;
+  switch (member.state) {
+    case 'IDLE':
+    case 'FIND_NODE': {
+      const node = chooseMinerNode(state, member, floor);
+      if (!node) { member.state = 'IDLE'; return; }
+      member.targetNodeId = node.id;
+      member.body.facing = node.x >= member.body.x ? 1 : -1;
+      member.state = 'MOVING_TO_NODE';
+      emit(state, 'CREW_TASK_SELECTED', { crewId: member.id, role: 'MINER', depth: member.assignedDepth, nodeId: node.id, priority: member.minerPriority });
+      return;
+    }
+    case 'MOVING_TO_NODE': {
+      const node = findCrewNode(member, floor);
+      if (!node || node.hp <= 0) { member.targetNodeId = null; member.state = 'FIND_NODE'; return; }
+      member.body.facing = node.x >= member.body.x ? 1 : -1;
+      if (moveToward(member.body, nodeDestination(node), dt)) member.state = 'MINING';
+      return;
+    }
+    case 'MINING': {
+      const node = findCrewNode(member, floor);
+      if (!node || node.hp <= 0) { member.swing = null; member.targetNodeId = null; member.state = 'FIND_NODE'; return; }
+      if (!member.swing) {
+        member.swing = { elapsed: 0, hitApplied: false };
+        emit(state, 'MINER_SWING_START', { crewId: member.id, nodeId: node.id, depth: member.assignedDepth });
+      }
+      member.swing.elapsed += dt;
+      if (!member.swing.hitApplied && member.swing.elapsed >= SWING.hitAt) {
+        member.swing.hitApplied = true;
+        applyCrewMiningHit(state, member, floor, node);
+      }
+      if (member.swing.elapsed >= SWING.total) {
+        member.swing = null;
+        if (node.hp <= 0) { member.targetNodeId = null; member.state = 'FIND_NODE'; }
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+function chooseMinerNode(state: GameState, member: CrewMember, floor: FloorState): MiningNode | undefined {
+  const nodes = floor.nodes.filter((node) => node.hp > 0);
+  if (nodes.length === 0) return undefined;
+  return [...nodes].sort((a, b) => {
+    if (member.minerPriority === 'RESEARCH') {
+      const score = b.researchWeight - a.researchWeight;
+      if (score) return score;
+    } else if (member.minerPriority === 'RARE') {
+      const score = rareNodeScore(b) - rareNodeScore(a);
+      if (score) return score;
+    } else if (member.minerPriority === 'NEAREST') {
+      const distance = Math.abs(a.x - member.body.x) - Math.abs(b.x - member.body.x);
+      if (distance) return distance;
+    }
+    return a.id.localeCompare(b.id);
+  })[0];
+}
+
+function rareNodeScore(node: MiningNode): number {
+  return node.treasureChance + node.relicWeight * 0.45 + node.coreWeight * 0.35;
+}
+
+function findCrewNode(member: CrewMember, floor: FloorState): MiningNode | undefined {
+  return member.targetNodeId ? floor.nodes.find((node) => node.id === member.targetNodeId) : undefined;
+}
+
+function applyCrewMiningHit(state: GameState, member: CrewMember, floor: FloorState, node: MiningNode): void {
+  const modifiers = getModifiers(state);
+  let damage = 11 * modifiers.miningDamageMultiplier * crewToolMultiplier(state, member, node);
+  damage = Math.max(1, Math.round(damage));
+  emit(state, 'MINER_SWING_HIT', { crewId: member.id, nodeId: node.id, depth: member.assignedDepth, damage });
+  node.hp = Math.max(0, node.hp - damage);
+  emit(state, 'NODE_DAMAGE', { crewId: member.id, nodeId: node.id, depth: member.assignedDepth, hp: node.hp, maxHp: node.maxHp });
+  if (node.hp > 0) return;
+  node.respawnTimer = node.respawnDelay;
+  emit(state, 'NODE_BREAK', { crewId: member.id, nodeId: node.id, depth: member.assignedDepth });
+  spawnCrewLoot(state, member, floor, node);
+}
+
+function crewToolMultiplier(state: GameState, member: CrewMember, node: MiningNode): number {
+  const itemId = member.equipment.TOOL;
+  if (!itemId) return 1;
+  const item = state.run.phase5.equipment.inventory.find((candidate) => candidate.id === itemId);
+  if (!item) return 1;
+  let multiplier = 1;
+  for (const affix of item.affixes) {
+    if (affix.id === 'POWERED_EDGE') multiplier *= 1 + affix.value;
+    if (affix.id === 'FOSSIL_BREAKER' && node.fossilWeight >= 0.45) multiplier *= 1 + affix.value;
+  }
+  return multiplier;
+}
+
+function spawnCrewLoot(state: GameState, member: CrewMember, floor: FloorState, node: MiningNode): void {
+  const modifiers = getModifiers(state);
+  const range = Math.max(1, node.yieldMax - node.yieldMin + 1);
+  const baseCount = node.yieldMin + Math.floor(nextRandom(state) * range);
+  const commonCount = Math.max(1, Math.round(baseCount * modifiers.commonYieldMultiplier));
+  for (let index = 0; index < commonCount; index += 1) {
+    const item = createPhysicalLoot(state, pick(state, node.commonKinds), node.x + (nextRandom(state) - 0.5) * 18, member.assignedDepth, member.id);
+    floor.loot.push(item);
+    emitLootSpawn(state, item, node.id);
+  }
+  const found = nextRandom(state) < effectiveTreasureChance(state, node);
+  emit(state, 'TREASURE_ROLL', { crewId: member.id, nodeId: node.id, depth: member.assignedDepth, found });
+  if (found) {
+    const category = chooseCrewTreasureCategory(state, node);
+    const kind = pickTreasureKind(state, category);
+    const treasure = createPhysicalLoot(state, kind, node.x + (nextRandom(state) - 0.5) * 14, member.assignedDepth, member.id);
+    floor.loot.push(treasure);
+    emit(state, 'DISCOVERY_FOUND', { id: treasure.id, name: treasure.name, rarity: treasure.rarity, category: treasure.category, nodeId: node.id, depth: member.assignedDepth });
+    emitLootSpawn(state, treasure, node.id);
+  }
+  if (member.assignedDepth === D180) spawnAncientSiteDrop(state, floor, node, member.id);
+}
+
+function chooseCrewTreasureCategory(state: GameState, node: MiningNode): LootCategory {
+  const modifiers = getModifiers(state);
+  const weights: Array<[LootCategory, number]> = [
+    ['VALUABLE', node.valuableWeight * modifiers.valuableWeightMultiplier],
+    ['FOSSIL', node.fossilWeight * modifiers.fossilWeightMultiplier],
+    ['RELIC', node.relicWeight * modifiers.relicWeightMultiplier],
+    ['ANOMALY', node.anomalyWeight * modifiers.anomalyWeightMultiplier],
+    ['RESEARCH', node.researchWeight * modifiers.researchWeightMultiplier],
+    ['CORE', node.coreWeight],
+  ];
+  const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
+  if (total <= 0) return 'VALUABLE';
+  let roll = nextRandom(state) * total;
+  for (const [category, weight] of weights) {
+    roll -= weight;
+    if (roll <= 0) return category;
+  }
+  return 'VALUABLE';
+}
+
+function pickTreasureKind(state: GameState, category: LootCategory): LootKind {
+  switch (category) {
+    case 'VALUABLE': return pick(state, VALUABLE_KINDS);
+    case 'FOSSIL': return pick(state, FOSSIL_KINDS);
+    case 'RELIC': return pick(state, RELIC_KINDS);
+    case 'ANOMALY': return pick(state, ANOMALY_KINDS);
+    case 'RESEARCH': return pick(state, RESEARCH_KINDS);
+    case 'CORE': return pick(state, CORE_KINDS);
+    case 'ORE': return 'IRON';
+  }
+}
+
+function updateCrewPorter(state: GameState, member: CrewMember, dt: number): void {
+  const floor = phase5Floor(state, member.assignedDepth);
+  if (!floor) return;
+  switch (member.state) {
+    case 'IDLE':
+    case 'FIND_LOOT': {
+      if (member.body.carried.length > 0) { member.state = 'RETURNING_TO_CARGO'; return; }
+      const target = choosePorterLoot(state, member, floor);
+      if (!target) { member.state = 'IDLE'; return; }
+      member.targetLootId = target.id;
+      member.body.facing = target.x >= member.body.x ? 1 : -1;
+      member.state = 'MOVING_TO_LOOT';
+      emit(state, 'CREW_TASK_SELECTED', { crewId: member.id, role: 'PORTER', depth: member.assignedDepth, lootId: target.id, priority: member.porterPriority });
+      return;
+    }
+    case 'MOVING_TO_LOOT': {
+      const target = findCrewLoot(member, floor);
+      if (!target) { member.targetLootId = null; member.state = 'FIND_LOOT'; return; }
+      member.body.facing = target.x >= member.body.x ? 1 : -1;
+      if (moveToward(member.body, target.x, dt)) { member.collectTimer = 0; member.state = 'COLLECTING'; }
+      return;
+    }
+    case 'COLLECTING': {
+      const target = findCrewLoot(member, floor);
+      if (!target) { member.targetLootId = null; member.state = 'FIND_LOOT'; return; }
+      member.collectTimer += dt;
+      if (member.collectTimer < PORTER_COLLECT_DURATION) return;
+      pickUpCrewLoot(state, member, floor, target);
+      member.collectTimer = 0;
+      member.targetLootId = null;
+      member.state = member.body.carried.length > 0 ? 'RETURNING_TO_CARGO' : 'FIND_LOOT';
+      return;
+    }
+    case 'RETURNING_TO_CARGO':
+      member.body.facing = CARGO_POINT_X >= member.body.x ? 1 : -1;
+      if (moveToward(member.body, CARGO_POINT_X, dt)) { member.loadingTimer = 0; member.state = 'DEPOSITING'; }
+      return;
+    case 'DEPOSITING':
+      member.loadingTimer += dt;
+      if (member.loadingTimer < COLLECT_DURATION) return;
+      depositCrewCargo(state, member, floor);
+      member.loadingTimer = 0;
+      member.state = 'FIND_LOOT';
+      return;
+    default:
+      return;
+  }
+}
+
+function choosePorterLoot(state: GameState, member: CrewMember, floor: FloorState): LootStack | undefined {
+  const cargoHook = equippedCrewHasAffix(state, member, 'CARGO_HOOK');
+  return [...floor.loot].sort((a, b) => {
+    const priority = porterPriorityScore(b, member.porterPriority, cargoHook) - porterPriorityScore(a, member.porterPriority, cargoHook);
+    if (priority) return priority;
+    const distance = Math.abs(a.x - member.body.x) - Math.abs(b.x - member.body.x);
+    return distance || a.id.localeCompare(b.id);
+  })[0];
+}
+
+function porterPriorityScore(item: LootStack, priority: PorterPriority, cargoHook: boolean): number {
+  let score = 0;
+  if (priority === 'CORE' && item.category === 'CORE') score += 100;
+  if (priority === 'RESEARCH' && item.category === 'RESEARCH') score += 100;
+  if (priority === 'RELIC' && item.category === 'RELIC') score += 100;
+  if (priority === 'RARE') score += LOOT_RARITY_RANK[item.rarity] * 20;
+  if (priority === 'VALUE') score += item.value / 5;
+  if (priority === 'NEAREST') score += 0;
+  if (cargoHook && LOOT_RARITY_RANK[item.rarity] >= 2) score += 45;
+  score += LOOT_RARITY_RANK[item.rarity] * 2;
+  return score;
+}
+
+function findCrewLoot(member: CrewMember, floor: FloorState): LootStack | undefined {
+  return member.targetLootId ? floor.loot.find((item) => item.id === member.targetLootId) : undefined;
+}
+
+function pickUpCrewLoot(state: GameState, member: CrewMember, floor: FloorState, target: LootStack): void {
+  const candidates = [target, ...floor.loot.filter((item) => item.id !== target.id && Math.abs(item.x - target.x) <= 14)
+    .sort((a, b) => LOOT_RARITY_RANK[b.rarity] - LOOT_RARITY_RANK[a.rarity] || a.id.localeCompare(b.id))];
+  for (const item of candidates) {
+    if (!floor.loot.some((candidate) => candidate.id === item.id)) continue;
+    if (cargoWeight(member.body.carried) + item.weight > member.capacity + 0.001) continue;
+    member.body.carried.push(item);
+    const index = floor.loot.findIndex((candidate) => candidate.id === item.id);
+    if (index >= 0) floor.loot.splice(index, 1);
+    emit(state, 'PORTER_PICKUP', { crewId: member.id, id: item.id, depth: member.assignedDepth, name: item.name, rarity: item.rarity });
+  }
+}
+
+function depositCrewCargo(state: GameState, member: CrewMember, floor: FloorState): void {
+  if (member.body.carried.length === 0) return;
+  const deposited = member.body.carried.splice(0);
+  for (const item of deposited) { item.x = CARGO_POINT_X; item.y = WORLD.floorY - 5; }
+  floor.cargo.push(...deposited);
+  emit(state, 'FLOOR_CARGO_DEPOSITED', {
+    crewId: member.id,
+    depth: member.assignedDepth,
+    items: deposited.length,
+    weight: Number(cargoWeight(deposited).toFixed(2)),
+  });
+}
+
+function updateCargoNetwork(state: GameState, dt: number): void {
+  const cargo = state.run.phase5.cargo;
+  if (!cargo.unlocked) return;
+  if (cargo.route) {
+    cargo.route.remaining = Math.max(0, cargo.route.remaining - dt);
+    const progress = 1 - cargo.route.remaining / cargo.route.duration;
+    state.run.elevator.position = Math.sin(progress * Math.PI) * 0.22;
+    if (cargo.route.remaining > 0) return;
+    const depth = cargo.route.targetDepth;
+    const floor = phase5Floor(state, depth);
+    state.run.elevator.state = 'IDLE_BOTTOM';
+    state.run.elevator.position = 0;
+    state.run.elevator.stateTimer = 0;
+    cargo.route = null;
+    cargo.lastServedDepth = depth;
+    emit(state, 'ELEVATOR_ARRIVED_DEPTH', { depth });
+    const loaded = loadFloorCargo(state, floor, depth);
+    if (loaded > 0) {
+      cargo.deliveredLoads += 1;
+      if (!sendElevator(state)) emit(state, 'FLOOR_CARGO_LOADED', { depth, items: loaded, waiting: true });
+    }
+    return;
+  }
+  if (!canStartCargoRoute(state)) return;
+  const target = selectCargoFloor(state);
+  if (!target) return;
+  cargo.route = { targetDepth: target, remaining: CARGO_ROUTE_DURATION, duration: CARGO_ROUTE_DURATION };
+  state.run.elevator.state = 'TRAVELING';
+  state.run.elevator.position = 0;
+  emit(state, 'CARGO_ROUTE_REQUESTED', { depth: target, priority: cargo.priority });
+  emit(state, 'ELEVATOR_STOP_SELECTED', { depth: target, priority: cargo.priority });
+}
+
+function canStartCargoRoute(state: GameState): boolean {
+  const run = state.run;
+  if (run.elevator.state !== 'IDLE_BOTTOM' || run.elevator.travel || run.elevator.cargo.length > 0) return false;
+  if (run.character.state === 'LOADING' || run.character.state === 'WAITING_FOR_ELEVATOR') return false;
+  if (run.porter.state === 'LOADING' || run.porter.state === 'WAITING_FOR_ELEVATOR') return false;
+  return !run.phase5.crew.members.some((member) => member.state === 'TRAVELING' || member.state === 'MOVING_TO_ELEVATOR');
+}
+
+function selectCargoFloor(state: GameState): Phase5DepthId | null {
+  const waiting = unlockedPhase5Depths(state).filter((depth) => phase5Floor(state, depth)?.cargo.length > 0);
+  if (waiting.length === 0) return null;
+  const priority = state.run.phase5.cargo.priority;
+  const last = state.run.phase5.cargo.lastServedDepth;
+  return [...waiting].sort((a, b) => {
+    const score = cargoFloorScore(state, b, priority) - cargoFloorScore(state, a, priority);
+    if (score) return score;
+    if (a === last) return 1;
+    if (b === last) return -1;
+    return depthDistance(a, 'D-001') - depthDistance(b, 'D-001');
+  })[0] ?? null;
+}
+
+function cargoFloorScore(state: GameState, depth: Phase5DepthId, priority: CargoRoutingPriority): number {
+  const items = phase5Floor(state, depth).cargo;
+  let score = Math.min(30, cargoWeight(items));
+  if (priority === 'CORE') score += items.some((item) => item.category === 'CORE') ? 100 : 0;
+  if (priority === 'RESEARCH') score += items.some((item) => item.category === 'RESEARCH') ? 100 : 0;
+  if (priority === 'ANCIENT') score += depth === D180 ? 110 : 0;
+  if (priority === 'BALANCED') {
+    score += items.some((item) => item.category === 'CORE') ? 32 : 0;
+    score += items.some((item) => item.category === 'RESEARCH') ? 22 : 0;
+    score += depth === D180 ? 18 : 0;
+  }
+  return score;
+}
+
+function loadFloorCargo(state: GameState, floor: FloorState, depth: Phase5DepthId): number {
+  let remaining = Math.max(0, state.run.elevator.maxLoad - cargoWeight(state.run.elevator.cargo));
+  const ordered = [...floor.cargo].sort((a, b) => cargoItemPriority(state, b, depth) - cargoItemPriority(state, a, depth) || a.id.localeCompare(b.id));
+  const loaded: LootStack[] = [];
+  for (const item of ordered) {
+    if (item.weight > remaining + 0.001) continue;
+    loaded.push(item);
+    remaining -= item.weight;
+  }
+  const ids = new Set(loaded.map((item) => item.id));
+  floor.cargo = floor.cargo.filter((item) => !ids.has(item.id));
+  state.run.elevator.cargo.push(...loaded);
+  emit(state, 'FLOOR_CARGO_LOADED', { depth, items: loaded.length, weight: Number(cargoWeight(loaded).toFixed(2)) });
+  return loaded.length;
+}
+
+function cargoItemPriority(state: GameState, item: LootStack, depth: Phase5DepthId): number {
+  const priority = state.run.phase5.cargo.priority;
+  let score = LOOT_RARITY_RANK[item.rarity] * 4 + item.value / 40;
+  if (item.category === 'CORE') score += priority === 'CORE' ? 120 : 35;
+  if (item.category === 'RESEARCH') score += priority === 'RESEARCH' ? 120 : 28;
+  if (priority === 'ANCIENT' && depth === D180) score += 100;
+  if (item.equipmentSeed !== undefined) score += 80;
+  return score;
+}
+
+export function canPushD180(state: GameState): boolean {
+  const run = state.run;
+  if (state.meta.runIndex < 2 || run.depth.current !== 'D-100' || isD180Unlocked(state)) return false;
+  if (!run.phase5.ancient.signalFound || !run.phase5.crew.unlocked || !run.phase5.cargo.unlocked) return false;
+  if (!run.research.completed.includes('ANCIENT_SURVEY') || !run.research.completed.includes('CARGO_SCHEDULER')) return false;
+  if (run.pendingCore < 1 || run.scrap < D180_EXTENSION_COST) return false;
+  if (run.elevator.state !== 'IDLE_BOTTOM' || run.elevator.travel || run.elevator.cargo.length > 0 || run.phase5.cargo.route) return false;
+  return !run.phase5.crew.members.some((member) => member.state === 'TRAVELING' || member.state === 'MOVING_TO_ELEVATOR');
+}
+
+export function pushD180(state: GameState): boolean {
+  if (!canPushD180(state)) return false;
+  state.run.scrap -= D180_EXTENSION_COST;
+  const unlocked = state.run.depth.unlocked as unknown as Phase5DepthId[];
+  if (!unlocked.includes(D180)) unlocked.push(D180);
+  state.run.phase5.ancient.pushCommitted = true;
+  state.run.phase5.ancient.unlocked = true;
+  emit(state, 'DEPTH_UNLOCKED', { depth: D180, cost: D180_EXTENSION_COST });
+  emit(state, 'D180_UNLOCKED', { depth: D180, cost: D180_EXTENSION_COST, run: state.meta.runIndex });
+  return true;
+}
+
+export function canTravelPhase5(state: GameState, depth: Phase5DepthId): boolean {
+  return canTravelToDepth(state, depth as DepthId);
+}
+
+export function requestPhase5Travel(state: GameState, depth: Phase5DepthId): boolean {
+  return requestFloorTravel(state, depth as DepthId);
+}
+
+export function processPhase5Events(state: GameState, events: readonly GameEvent[]): void {
+  for (const event of events) {
+    if (event.type === 'NODE_BREAK' && state.run.depth.current === (D180 as unknown as DepthId) && !event.data?.crewId) {
+      const nodeId = String(event.data?.nodeId ?? '');
+      const floor = phase5Floor(state, D180);
+      const node = floor.nodes.find((candidate) => candidate.id === nodeId);
+      if (node) spawnAncientSiteDrop(state, floor, node, 'PLAYER');
+    }
+    if (event.type === 'LOOT_APPRAISE') appraiseEquipmentDrop(state, String(event.data?.id ?? ''));
+  }
+}
+
+function spawnAncientSiteDrop(state: GameState, floor: FloorState, node: MiningNode, sourceId: string): void {
+  let chance = node.id === 'sealed-chamber' ? 0.1 : node.id === 'ruined-workshop' ? 0.08 : 0.04;
+  if (state.run.research.completed.includes('SALVAGE_ANALYSIS')) chance *= 1.18;
+  if (nextRandom(state) >= chance) {
+    if (node.id === 'archive-vault' && nextRandom(state) < 0.12) {
+      const archive = createPhysicalLoot(state, 'ARCHIVE_DEVICE', node.x + 5, D180, sourceId);
+      floor.loot.push(archive);
+      emit(state, 'ANCIENT_DISCOVERY_FOUND', { id: archive.id, name: archive.name, nodeId: node.id, depth: D180 });
+      emitLootSpawn(state, archive, node.id);
+    }
+    return;
+  }
+  const slot: EquipmentSlot = node.id === 'ruined-workshop'
+    ? (nextRandom(state) < 0.72 ? 'TOOL' : 'PACK')
+    : node.id === 'archive-vault'
+      ? (nextRandom(state) < 0.68 ? 'LAMP' : 'PACK')
+      : (nextRandom(state) < 0.68 ? 'TOOL' : nextRandom(state) < 0.5 ? 'LAMP' : 'PACK');
+  const kind: LootKind = slot === 'TOOL' ? 'ANCIENT_TOOL_CRATE' : slot === 'PACK' ? 'ANCIENT_PACK_CRATE' : 'ANCIENT_LAMP_CRATE';
+  const equipmentSeed = hashSeed(state.run.seed ^ floor.seed ^ Math.imul(state.run.nextLootId, 0x45d9f3b) ^ Math.floor(nextRandom(state) * 0xffffffff));
+  const loot = createPhysicalLoot(state, kind, node.x + (nextRandom(state) - 0.5) * 10, D180, sourceId, equipmentSeed);
+  floor.loot.push(loot);
+  state.run.phase5.equipment.drops.push({ lootId: loot.id, seed: equipmentSeed, baseId: equipmentBaseId(slot, node.id), slot, sourceDepth: D180 });
+  emit(state, 'EQUIPMENT_DROP', { id: loot.id, slot, nodeId: node.id, depth: D180, seed: equipmentSeed });
+  emit(state, 'DISCOVERY_FOUND', { id: loot.id, name: loot.name, rarity: loot.rarity, category: loot.category, nodeId: node.id, depth: D180 });
+  emitLootSpawn(state, loot, node.id);
+}
+
+function equipmentBaseId(slot: EquipmentSlot, site: string): string {
+  if (slot === 'TOOL') return site === 'sealed-chamber' ? 'sealed-cutter' : 'workshop-pick';
+  if (slot === 'PACK') return 'field-frame';
+  if (slot === 'LAMP') return 'survey-lamp';
+  return 'ancient-boots';
+}
+
+function appraiseEquipmentDrop(state: GameState, lootId: string): void {
+  const drops = state.run.phase5.equipment.drops;
+  const index = drops.findIndex((drop) => drop.lootId === lootId);
+  if (index < 0) return;
+  const drop = drops[index]!;
+  const item = generateEquipmentItem(state, drop.seed, drop.baseId, drop.slot);
+  state.run.phase5.equipment.inventory.push(item);
+  drops.splice(index, 1);
+  if (!state.meta.equipmentDiscoveries.includes(item.baseId)) state.meta.equipmentDiscoveries.push(item.baseId);
+  if (!state.meta.ancientDiscoveries.includes(item.baseId)) state.meta.ancientDiscoveries.push(item.baseId);
+  if (!state.run.phase5.ancient.discoveries.includes(item.baseId)) state.run.phase5.ancient.discoveries.push(item.baseId);
+  emit(state, 'EQUIPMENT_APPRAISED', { id: item.id, baseId: item.baseId, slot: item.slot, rarity: item.rarity, seed: item.seed });
+}
+
+export function generateEquipmentItem(state: GameState, seed: number, baseId: string, slot: EquipmentSlot): EquipmentItem {
+  let cursor = hashSeed(seed);
+  const random = (): number => {
+    cursor = hashSeed(cursor ^ 0x9e3779b9);
+    return cursor / 0x100000000;
+  };
+  const rarityRoll = random();
+  const rarity: EquipmentRarity = rarityRoll < 0.04 ? 'ANCIENT' : rarityRoll < 0.2 ? 'EPIC' : rarityRoll < 0.55 ? 'RARE' : 'COMMON';
+  const affixCount = rarity === 'ANCIENT' ? 3 : rarity === 'EPIC' ? 2 : rarity === 'RARE' ? (random() < 0.5 ? 1 : 2) : 1;
+  const pool = affixPool(slot);
+  const chosen: EquipmentAffix[] = [];
+  while (chosen.length < Math.min(affixCount, pool.length)) {
+    const id = pool[Math.floor(random() * pool.length)]!;
+    if (chosen.some((affix) => affix.id === id)) continue;
+    chosen.push(makeAffix(id, rarity, random()));
+  }
+  const id = `equip-${state.meta.runIndex}-${state.run.phase5.equipment.nextItemId++}`;
+  return {
+    id,
+    baseId,
+    name: equipmentName(baseId, rarity),
+    slot,
+    rarity,
+    level: 1 + EQUIPMENT_RARITY_RANK[rarity],
+    affixes: chosen,
+    seed,
+  };
+}
+
+function affixPool(slot: EquipmentSlot): EquipmentAffixId[] {
+  if (slot === 'TOOL') return ['POWERED_EDGE', 'RESEARCH_PRISM', 'FOSSIL_BREAKER', 'CORE_TUNER'];
+  if (slot === 'PACK') return ['LIGHT_FRAME', 'CARGO_HOOK', 'RESEARCH_PRISM'];
+  if (slot === 'LAMP') return ['SURVEY_LAMP', 'RESEARCH_PRISM', 'CORE_TUNER'];
+  return ['LIGHT_FRAME', 'SURVEY_LAMP'];
+}
+
+function makeAffix(id: EquipmentAffixId, rarity: EquipmentRarity, roll: number): EquipmentAffix {
+  const scale = rarity === 'ANCIENT' ? 1.5 : rarity === 'EPIC' ? 1.25 : rarity === 'RARE' ? 1 : 0.72;
+  const variable = 0.85 + roll * 0.3;
+  switch (id) {
+    case 'POWERED_EDGE': {
+      const value = Number((0.2 * scale * variable).toFixed(3));
+      return { id, name: 'Powered Edge', value, description: `Mining damage +${Math.round(value * 100)}%` };
+    }
+    case 'RESEARCH_PRISM': {
+      const value = Number((0.18 * scale * variable).toFixed(3));
+      return { id, name: 'Research Prism', value, description: `Research signal chance +${Math.round(value * 100)}%` };
+    }
+    case 'FOSSIL_BREAKER': {
+      const value = Number((0.36 * scale * variable).toFixed(3));
+      return { id, name: 'Fossil Breaker', value, description: `Fossil-rich node damage +${Math.round(value * 100)}%` };
+    }
+    case 'LIGHT_FRAME': {
+      const value = Number((0.16 * scale * variable).toFixed(3));
+      return { id, name: 'Light Frame', value, description: `Movement while hauling +${Math.round(value * 100)}%` };
+    }
+    case 'SURVEY_LAMP': {
+      const value = Number((0.28 * scale * variable).toFixed(3));
+      return { id, name: 'Survey Lamp', value, description: 'Shows hidden Research signals before mining.' };
+    }
+    case 'CARGO_HOOK': {
+      const value = Number((0.25 * scale * variable).toFixed(3));
+      return { id, name: 'Cargo Hook', value, description: 'Assigned Porters bias toward rare physical cargo.' };
+    }
+    case 'CORE_TUNER': {
+      const value = Number((0.15 * scale * variable).toFixed(3));
+      return { id, name: 'Core Tuner', value, description: `Core-rich site effectiveness +${Math.round(value * 100)}%` };
+    }
+  }
+}
+
+function equipmentName(baseId: string, rarity: EquipmentRarity): string {
+  const base = baseId === 'sealed-cutter' ? 'Ancient Cutter'
+    : baseId === 'workshop-pick' ? 'Workshop Pick'
+      : baseId === 'field-frame' ? 'Field Frame Pack'
+        : baseId === 'survey-lamp' ? 'Survey Lamp'
+          : 'Ancient Gear';
+  return rarity === 'ANCIENT' ? `Prime ${base}` : rarity === 'EPIC' ? `${base} Mk.III` : rarity === 'RARE' ? `${base} Mk.II` : base;
+}
+
+export function equipPlayerItem(state: GameState, itemId: string): boolean {
+  const equipment = state.run.phase5.equipment;
+  const item = equipment.inventory.find((candidate) => candidate.id === itemId);
+  if (!item) return false;
+  clearEquipmentOwner(state, itemId);
+  equipment.equippedPlayer[item.slot] = itemId;
+  if (item.slot === 'PACK') state.run.character.backpackCapacity = PLAYER_PACK_CAPACITY[state.run.pack.level] + 2 + item.level * 2;
+  emit(state, 'EQUIPMENT_EQUIPPED', { id: item.id, slot: item.slot, rarity: item.rarity, target: 'PLAYER' });
+  return true;
+}
+
+export function equipCrewItem(state: GameState, crewId: string, itemId: string): boolean {
+  const member = state.run.phase5.crew.members.find((candidate) => candidate.id === crewId);
+  const item = state.run.phase5.equipment.inventory.find((candidate) => candidate.id === itemId);
+  if (!member || !item || (item.slot !== 'TOOL' && item.slot !== 'LAMP')) return false;
+  clearEquipmentOwner(state, itemId);
+  member.equipment[item.slot] = itemId;
+  emit(state, 'EQUIPMENT_EQUIPPED', { id: item.id, slot: item.slot, rarity: item.rarity, target: crewId });
+  return true;
+}
+
+function clearEquipmentOwner(state: GameState, itemId: string): void {
+  const equipped = state.run.phase5.equipment.equippedPlayer;
+  for (const slot of Object.keys(equipped) as EquipmentSlot[]) if (equipped[slot] === itemId) delete equipped[slot];
+  for (const member of state.run.phase5.crew.members) {
+    for (const slot of ['TOOL', 'LAMP'] as const) if (member.equipment[slot] === itemId) delete member.equipment[slot];
+  }
+}
+
+function equippedCrewHasAffix(state: GameState, member: CrewMember, id: EquipmentAffixId): boolean {
+  return Object.values(member.equipment).some((itemId) => state.run.phase5.equipment.inventory.find((item) => item.id === itemId)?.affixes.some((affix) => affix.id === id));
+}
+
+export function playerHasEquipmentAffix(state: GameState, id: EquipmentAffixId): boolean {
+  return Object.values(state.run.phase5.equipment.equippedPlayer).some((itemId) => state.run.phase5.equipment.inventory.find((item) => item.id === itemId)?.affixes.some((affix) => affix.id === id));
+}
+
+export function prepareLegacyEquipmentForReboot(state: GameState): void {
+  if (!state.meta.protocols.includes('LEGACY_LOCKER')) {
+    state.meta.legacyEquipment = null;
+    return;
+  }
+  const inventory = state.run.phase5.equipment.inventory;
+  const equippedTool = state.run.phase5.equipment.equippedPlayer.TOOL;
+  const chosen = inventory.find((item) => item.id === equippedTool)
+    ?? [...inventory].sort((a, b) => EQUIPMENT_RARITY_RANK[b.rarity] - EQUIPMENT_RARITY_RANK[a.rarity] || b.level - a.level || a.id.localeCompare(b.id))[0];
+  state.meta.legacyEquipment = chosen ? { ...chosen, affixes: chosen.affixes.map((affix) => ({ ...affix })) } : null;
+}
+
+export function armPhase5Reboot(state: GameState): boolean {
+  prepareLegacyEquipmentForReboot(state);
+  return armReboot(state);
+}
+
+export function applyOfflineProgress(state: GameState, now = Date.now()): OfflineReport | null {
+  const offline = state.run.phase5.offline;
+  const baseline = Math.max(offline.savedAt, offline.processedAt);
+  if (baseline <= 0 || now <= baseline || state.run.elevator.travel) {
+    offline.processedAt = Math.max(offline.processedAt, now);
+    return null;
+  }
+  const seconds = Math.min(OFFLINE_CAP_SECONDS, Math.max(0, (now - baseline) / 1000));
+  offline.processedAt = now;
+  offline.savedAt = now;
+  if (seconds < 2) return null;
+
+  const character = { ...state.run.character, carried: [...state.run.character.carried], swing: state.run.character.swing ? { ...state.run.character.swing } : null };
+  const porter = { ...state.run.porter, carried: [...state.run.porter.carried] };
+  const autoSwing = state.run.automation.autoSwing.enabled;
+  state.run.character.state = 'IDLE';
+  state.run.character.targetNodeId = null;
+  state.run.character.swing = null;
+  state.run.automation.autoSwing.enabled = false;
+  state.run.porter.enabled = false;
+
+  let remaining = seconds;
+  const observed: GameEvent[] = [];
+  while (remaining > 0.0001) {
+    const step = Math.min(OFFLINE_STEP_SECONDS, remaining);
+    updateGame(state, step);
+    updatePhase5(state, step);
+    const events = drainEvents(state);
+    processPhase5Events(state, events);
+    observed.push(...events);
+    const appraisalEvents = drainEvents(state);
+    if (appraisalEvents.length > 0) observed.push(...appraisalEvents);
+    remaining -= step;
+  }
+
+  state.run.character = character;
+  state.run.porter = porter;
+  state.run.automation.autoSwing.enabled = autoSwing;
+  const report = buildOfflineReport(state, seconds, observed, now);
+  offline.lastReport = report;
+  emit(state, 'OFFLINE_PROGRESS_APPLIED', { seconds: Math.round(seconds), events: observed.length });
+  return report;
+}
+
+function buildOfflineReport(state: GameState, seconds: number, events: readonly GameEvent[], now: number): OfflineReport {
+  const depths = [...new Set(state.run.phase5.crew.members.map((member) => member.assignedDepth))];
+  const entries = depths.map((depth) => ({ depth, loads: 0, data: 0, scrap: 0, core: 0, equipment: 0 }));
+  const get = (depth: Phase5DepthId): (typeof entries)[number] => {
+    let entry = entries.find((candidate) => candidate.depth === depth);
+    if (!entry) { entry = { depth, loads: 0, data: 0, scrap: 0, core: 0, equipment: 0 }; entries.push(entry); }
+    return entry;
+  };
+  let lastDepth: Phase5DepthId = depths[0] ?? (state.run.depth.current as Phase5DepthId);
+  for (const event of events) {
+    const eventDepth = typeof event.data?.depth === 'string' ? event.data.depth as Phase5DepthId : lastDepth;
+    if (event.type === 'FLOOR_CARGO_LOADED') { lastDepth = eventDepth; get(eventDepth).loads += 1; }
+    if (event.type === 'DATA_GAIN') get(lastDepth).data += Number(event.data?.amount ?? 0);
+    if (event.type === 'RESOURCE_GAIN') get(lastDepth).scrap += Number(event.data?.amount ?? 0);
+    if (event.type === 'CORE_CHARGE_GAINED') get(lastDepth).core += Number(event.data?.amount ?? 0);
+    if (event.type === 'EQUIPMENT_APPRAISED') get(D180).equipment += 1;
+  }
+  return { seconds, entries, createdAt: now };
+}
+
+export function markOfflineSave(state: GameState, now = Date.now()): void {
+  state.run.phase5.offline.savedAt = now;
+}
+
+function createPhysicalLoot(
+  state: GameState,
+  kind: LootKind,
+  x: number,
+  depth: Phase5DepthId,
+  sourceCrewId?: string,
+  equipmentSeed?: number,
+): LootStack {
+  const definition = LOOT[kind];
+  return {
+    id: `loot-${state.meta.runIndex}-${state.run.nextLootId++}`,
+    kind,
+    name: definition.name,
+    rarity: definition.rarity,
+    category: definition.category,
+    weight: definition.weight,
+    value: definition.value,
+    dataValue: definition.dataValue ?? 0,
+    coreValue: definition.coreValue ?? 0,
+    x,
+    y: WORLD.floorY - 4,
+    originDepth: depth,
+    ...(sourceCrewId ? { sourceCrewId } : {}),
+    ...(equipmentSeed !== undefined ? { equipmentSeed } : {}),
+  };
+}
+
+function emitLootSpawn(state: GameState, item: LootStack, nodeId: string): void {
+  emit(state, 'LOOT_SPAWN', {
+    id: item.id,
+    name: item.name,
+    rarity: item.rarity,
+    category: item.category,
+    value: item.value,
+    data: item.dataValue,
+    core: item.coreValue,
+    x: item.x,
+    y: item.y,
+    nodeId,
+    ...(item.originDepth ? { depth: item.originDepth } : {}),
+  });
+}
+
+function moveToward(worker: WorkerBody, destination: number, dt: number): boolean {
+  const delta = destination - worker.x;
+  const distance = Math.abs(delta);
+  if (distance <= 0.5) { worker.x = destination; return true; }
+  const step = worker.moveSpeed * dt;
+  if (step >= distance) { worker.x = destination; return true; }
+  worker.x += Math.sign(delta) * step;
+  return false;
+}
+
+function nodeDestination(node: MiningNode): number {
+  return node.x < WORLD.elevatorX ? node.x + NODE_STOP_DISTANCE : node.x - NODE_STOP_DISTANCE;
+}
+
+function depthDistance(a: Phase5DepthId, b: Phase5DepthId): number {
+  const rank: Record<Phase5DepthId, number> = { 'D-001': 1, 'D-030': 30, 'D-060': 60, 'D-100': 100, 'D-180': 180 };
+  return Math.abs(rank[a] - rank[b]);
+}
+
+function emit(state: GameState, type: GameEventType, data?: Record<string, string | number | boolean>): void {
+  const event: GameEvent = { id: state.nextEventId++, type, at: state.elapsed, ...(data ? { data } : {}) };
+  state.events.push(event);
+  state.eventHistory.push(event);
+  if (state.eventHistory.length > 260) state.eventHistory.splice(0, state.eventHistory.length - 260);
+}
