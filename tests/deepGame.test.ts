@@ -183,6 +183,9 @@ describe('Milestone 6 — Deep Network / Industrial Depths', () => {
     const line = state.run.logistics.lines[0]!;
     const heavy = makeLoot('ANCIENT_ALLOY', 'too-heavy', 'D-250');
     line.maxInputWeight = Math.max(0, heavy.weight - 0.1);
+    // Isolate Rail backpressure: the existing Central Elevator scheduler would otherwise
+    // legitimately collect the same Floor Cargo before Rail gets a chance to reject it.
+    state.run.phase5.cargo.unlocked = false;
     state.run.floors['D-250'].cargo.push(heavy);
     for (let index = 0; index < 120; index += 1) step(state);
     expect(state.run.floors['D-250'].cargo.some((item) => item.id === heavy.id)).toBe(true);
