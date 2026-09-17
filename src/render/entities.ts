@@ -141,6 +141,7 @@ export function lootColor(kind: LootKind): string {
     case 'PROSPECTOR_LENS': return '#8da3a2'; case 'RHYTHM_RELAY': return '#a18461'; case 'HUNTER_COMPASS': return '#9b8154'; case 'STRIDE_MODULE': return '#6f8890'; case 'FRACTURE_CORE': return '#886d7c'; case 'BLACK_GLASS_HEART': return '#555d63';
     case 'CRYSTAL_MEMORY': case 'SURVEY_CARTRIDGE': case 'DAMAGED_RESEARCH_LOG': case 'RESONANCE_SHARD': case 'UNKNOWN_INSTRUMENT': return PALETTE.d060Lamp;
     case 'CORE_FRAGMENT': return '#9e8067'; case 'CORE_MATRIX': return '#c09b78';
+    default: return '#8b795f';
   }
 }
 function rarityRank(r: Rarity): number { return ({ COMMON: 0, UNCOMMON: 1, RARE: 2, EPIC: 3, RELIC: 4, ANOMALY: 5 } as const)[r]; }
