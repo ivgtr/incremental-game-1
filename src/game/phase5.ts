@@ -336,7 +336,7 @@ function updateCrewMiner(state: GameState, member: CrewMember, dt: number): void
   }
 }
 
-function chooseMinerNode(state: GameState, member: CrewMember, floor: FloorState): MiningNode | undefined {
+function chooseMinerNode(_state: GameState, member: CrewMember, floor: FloorState): MiningNode | undefined {
   const nodes = floor.nodes.filter((node) => node.hp > 0);
   if (nodes.length === 0) return undefined;
   return [...nodes].sort((a, b) => {

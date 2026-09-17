@@ -180,6 +180,7 @@ describe('Milestone 5 — First Crew Operations / Push Beyond D-100', () => {
 
   it('keeps an Equipment crate physical until Elevator appraisal and deterministically materializes affixes', () => {
     const state = prepareRun2Crew(5009);
+    (state.run.depth.unlocked as string[]).push('D-180');
     const floor = phase5Floor(state, 'D-180');
     const crate = makeLoot('ANCIENT_TOOL_CRATE', 'equipment-crate', 'D-180');
     crate.equipmentSeed = 0x12345678;

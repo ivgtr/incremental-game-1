@@ -264,6 +264,7 @@ function frame(now: number): void {
   while (accumulator >= FIXED_STEP) {
     updateGame(state, FIXED_STEP);
     updatePhase5(state, FIXED_STEP);
+    if ((state.run.depth.current as string) === 'D-180') state.meta.bestDepth = 'D-180' as DepthId;
     accumulator -= FIXED_STEP;
   }
   const baseEvents = drainEvents(state);
