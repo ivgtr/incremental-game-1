@@ -1,0 +1,66 @@
+name: Validation
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee typecheck-output.txt
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build-output.txt
+      - name: Report failure details
+        if: always() && github.event_name == 'pull_request' && (steps.typecheck.outcome == 'failure' || steps.test.outcome == 'failure' || steps.build.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo '### Validation diagnostics'
+            for entry in 'typecheck:typecheck-output.txt' 'test:test-output.txt' 'build:build-output.txt'; do
+              label="${entry%%:*}"
+              file="${entry#*:}"
+              echo
+              echo "<details><summary>npm ${label}</summary>"
+              echo
+              echo '```text'
+              tail -n 180 "$file" 2>/dev/null || true
+              echo '```'
+              echo '</details>'
+            done
+          } > validation-comment.md
+          gh pr comment "$PR_NUMBER" --body-file validation-comment.md
+      - name: Enforce validation
+        if: steps.typecheck.outcome == 'failure' || steps.test.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: exit 1
