@@ -20,6 +20,7 @@ export type ElevatorState = 'IDLE_BOTTOM' | 'LOADING' | 'ASCENDING' | 'UNLOADING
 export type Rarity = 'COMMON' | 'UNCOMMON' | 'RARE' | 'EPIC' | 'RELIC' | 'ANOMALY';
 export type LootCategory = 'ORE' | 'VALUABLE' | 'FOSSIL' | 'RELIC' | 'ANOMALY' | 'RESEARCH' | 'CORE';
 export type DepthId = 'D-001' | 'D-030' | 'D-060' | 'D-100';
+export type Phase5DepthId = DepthId | 'D-180';
 export type NodeProfile = 'NEAR' | 'MID' | 'FAR' | 'CORE';
 
 export type LootKind =
@@ -48,7 +49,11 @@ export type LootKind =
   | 'RESONANCE_SHARD'
   | 'UNKNOWN_INSTRUMENT'
   | 'CORE_FRAGMENT'
-  | 'CORE_MATRIX';
+  | 'CORE_MATRIX'
+  | 'ANCIENT_TOOL_CRATE'
+  | 'ANCIENT_PACK_CRATE'
+  | 'ANCIENT_LAMP_CRATE'
+  | 'ARCHIVE_DEVICE';
 
 export type AnomalyId =
   | 'GOLD_RUSH'
@@ -70,14 +75,21 @@ export type ResearchId =
   | 'PRIORITY_CARGO_TAG'
   | 'MULTI_STOP_RELAY'
   | 'STRATA_SCANNER'
-  | 'CORE_RESONANCE';
+  | 'CORE_RESONANCE'
+  | 'CREW_ROUTING'
+  | 'CARGO_SCHEDULER'
+  | 'ANCIENT_SURVEY'
+  | 'SALVAGE_ANALYSIS';
 
 export type CoreProtocolId =
   | 'EXPERIENCED_HANDS'
   | 'CARGO_MEMORY'
   | 'SHAFT_BLUEPRINT'
   | 'VETERAN_ELEVATOR'
-  | 'SURVEY_ARCHIVE';
+  | 'SURVEY_ARCHIVE'
+  | 'CREW_MANIFEST'
+  | 'FREIGHT_MEMORY'
+  | 'LEGACY_LOCKER';
 
 export interface LootStack {
   id: string;
@@ -91,6 +103,9 @@ export interface LootStack {
   coreValue: number;
   x: number;
   y: number;
+  originDepth?: Phase5DepthId;
+  sourceCrewId?: string;
+  equipmentSeed?: number;
 }
 
 export interface MiningNode {
@@ -178,6 +193,7 @@ export interface FloorState {
   seed: number;
   nodes: MiningNode[];
   loot: LootStack[];
+  cargo: LootStack[];
 }
 
 export interface DepthProgress {
@@ -229,6 +245,151 @@ export interface CoreChamberState {
   rebootArmed: boolean;
 }
 
+export type CrewRole = 'MINER' | 'PORTER';
+export type CrewMemberState =
+  | 'IDLE'
+  | 'FIND_NODE'
+  | 'MOVING_TO_NODE'
+  | 'MINING'
+  | 'FIND_LOOT'
+  | 'MOVING_TO_LOOT'
+  | 'COLLECTING'
+  | 'RETURNING_TO_CARGO'
+  | 'DEPOSITING'
+  | 'MOVING_TO_ELEVATOR'
+  | 'TRAVELING';
+export type MinerPriority = 'RESEARCH' | 'RARE' | 'NEAREST' | 'ANY';
+export type PorterPriority = 'CORE' | 'RESEARCH' | 'RELIC' | 'RARE' | 'VALUE' | 'NEAREST';
+export type CargoRoutingPriority = 'BALANCED' | 'CORE' | 'RESEARCH' | 'ANCIENT';
+
+export interface CrewTravelState {
+  from: Phase5DepthId;
+  to: Phase5DepthId;
+  remaining: number;
+  duration: number;
+}
+
+export interface CrewMember {
+  id: string;
+  name: string;
+  role: CrewRole;
+  assignedDepth: Phase5DepthId;
+  pendingDepth: Phase5DepthId | null;
+  state: CrewMemberState;
+  body: WorkerBody;
+  targetNodeId: string | null;
+  targetLootId: string | null;
+  swing: SwingState | null;
+  collectTimer: number;
+  loadingTimer: number;
+  capacity: number;
+  minerPriority: MinerPriority;
+  porterPriority: PorterPriority;
+  travel: CrewTravelState | null;
+  equipment: Partial<Record<'TOOL' | 'LAMP', string>>;
+}
+
+export interface CrewOperationsState {
+  unlocked: boolean;
+  slots: number;
+  members: CrewMember[];
+  nextCrewId: number;
+}
+
+export interface CargoRouteState {
+  targetDepth: Phase5DepthId;
+  remaining: number;
+  duration: number;
+}
+
+export interface CargoNetworkState {
+  unlocked: boolean;
+  priority: CargoRoutingPriority;
+  route: CargoRouteState | null;
+  lastServedDepth: Phase5DepthId | null;
+  deliveredLoads: number;
+}
+
+export type EquipmentSlot = 'TOOL' | 'BOOTS' | 'PACK' | 'LAMP';
+export type EquipmentRarity = 'COMMON' | 'RARE' | 'EPIC' | 'ANCIENT';
+export type EquipmentAffixId =
+  | 'POWERED_EDGE'
+  | 'RESEARCH_PRISM'
+  | 'FOSSIL_BREAKER'
+  | 'LIGHT_FRAME'
+  | 'SURVEY_LAMP'
+  | 'CARGO_HOOK'
+  | 'CORE_TUNER';
+
+export interface EquipmentAffix {
+  id: EquipmentAffixId;
+  name: string;
+  value: number;
+  description: string;
+}
+
+export interface EquipmentItem {
+  id: string;
+  baseId: string;
+  name: string;
+  slot: EquipmentSlot;
+  rarity: EquipmentRarity;
+  level: number;
+  affixes: EquipmentAffix[];
+  seed: number;
+}
+
+export interface EquipmentDropRecord {
+  lootId: string;
+  seed: number;
+  baseId: string;
+  slot: EquipmentSlot;
+  sourceDepth: Phase5DepthId;
+}
+
+export interface EquipmentRunState {
+  inventory: EquipmentItem[];
+  equippedPlayer: Partial<Record<EquipmentSlot, string>>;
+  drops: EquipmentDropRecord[];
+  nextItemId: number;
+}
+
+export interface AncientRuinsState {
+  signalFound: boolean;
+  pushCommitted: boolean;
+  unlocked: boolean;
+  discoveries: string[];
+}
+
+export interface OfflineReportEntry {
+  depth: Phase5DepthId;
+  loads: number;
+  data: number;
+  scrap: number;
+  core: number;
+  equipment: number;
+}
+
+export interface OfflineReport {
+  seconds: number;
+  entries: OfflineReportEntry[];
+  createdAt: number;
+}
+
+export interface OfflineProgressState {
+  savedAt: number;
+  processedAt: number;
+  lastReport: OfflineReport | null;
+}
+
+export interface Phase5RunState {
+  crew: CrewOperationsState;
+  cargo: CargoNetworkState;
+  equipment: EquipmentRunState;
+  ancient: AncientRuinsState;
+  offline: OfflineProgressState;
+}
+
 export interface RunState {
   seed: number;
   rngState: number;
@@ -250,6 +411,7 @@ export interface RunState {
   research: ResearchState;
   coreChamber: CoreChamberState;
   discovery: DiscoveryState;
+  phase5: Phase5RunState;
   nextLootId: number;
 }
 
@@ -261,6 +423,9 @@ export interface MetaProgression {
   collection: CollectionState;
   passives: PassiveState;
   bestDepth: DepthId;
+  equipmentDiscoveries: string[];
+  ancientDiscoveries: string[];
+  legacyEquipment: EquipmentItem | null;
 }
 
 export type Selection =
@@ -272,6 +437,7 @@ export type Selection =
   | { type: 'research' }
   | { type: 'core-console' }
   | { type: 'core-chamber' }
+  | { type: 'crew-board' }
   | null;
 
 export type GameEventType =
@@ -287,7 +453,12 @@ export type GameEventType =
   | 'COLLECTION_REGISTERED' | 'COLLECTION_DUPLICATE' | 'PASSIVE_UNLOCKED' | 'PASSIVE_EQUIPPED'
   | 'RESEARCH_STARTED' | 'RESEARCH_COMPLETED'
   | 'CORE_CHAMBER_DISCOVERED' | 'REBOOT_AVAILABLE' | 'REBOOT_ARMED' | 'REBOOT_COMMITTED'
-  | 'CORE_GAINED' | 'CORE_PROTOCOL_PURCHASED' | 'RUN_STARTED';
+  | 'CORE_GAINED' | 'CORE_PROTOCOL_PURCHASED' | 'RUN_STARTED'
+  | 'CREW_HIRED' | 'CREW_ASSIGNED' | 'CREW_TRAVEL_STARTED' | 'CREW_ARRIVED' | 'CREW_TASK_SELECTED'
+  | 'FLOOR_CARGO_DEPOSITED' | 'CARGO_ROUTE_REQUESTED' | 'ELEVATOR_STOP_SELECTED' | 'ELEVATOR_ARRIVED_DEPTH' | 'FLOOR_CARGO_LOADED'
+  | 'EQUIPMENT_DROP' | 'EQUIPMENT_APPRAISED' | 'EQUIPMENT_EQUIPPED'
+  | 'D180_SIGNAL_FOUND' | 'D180_UNLOCKED' | 'ANCIENT_DISCOVERY_FOUND'
+  | 'OFFLINE_PROGRESS_APPLIED';
 
 export interface GameEvent {
   id: number;
@@ -297,7 +468,7 @@ export interface GameEvent {
 }
 
 export interface GameState {
-  version: 4;
+  version: 5;
   elapsed: number;
   run: RunState;
   meta: MetaProgression;

@@ -4,7 +4,7 @@ import {
   PLAYER_MOVE_SPEED,
   PORTER_MOVE_SPEED,
 } from './config';
-import type { GameState, LootCategory } from './types';
+import type { EquipmentItem, GameState, LootCategory } from './types';
 
 export interface EffectiveModifiers {
   playerMoveSpeed: number;
@@ -72,6 +72,27 @@ export function getModifiers(state: GameState): EffectiveModifiers {
       break;
   }
 
+  for (const equipment of equippedPlayerItems(state)) {
+    for (const affix of equipment.affixes) {
+      switch (affix.id) {
+        case 'POWERED_EDGE':
+          miningDamageMultiplier *= 1 + affix.value;
+          break;
+        case 'RESEARCH_PRISM':
+          researchWeightMultiplier *= 1 + affix.value;
+          break;
+        case 'LIGHT_FRAME':
+          playerMoveSpeed *= 1 + affix.value;
+          break;
+        case 'SURVEY_LAMP':
+          treasureChanceMultiplier *= 1 + affix.value * 0.25;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
   return {
     playerMoveSpeed,
     porterMoveSpeed,
@@ -87,6 +108,14 @@ export function getModifiers(state: GameState): EffectiveModifiers {
     researchWeightMultiplier,
     respawnSpeedMultiplier,
   };
+}
+
+function equippedPlayerItems(state: GameState): EquipmentItem[] {
+  const equipment = state.run.phase5.equipment;
+  return Object.values(equipment.equippedPlayer).flatMap((id) => {
+    const item = equipment.inventory.find((candidate) => candidate.id === id);
+    return item ? [item] : [];
+  });
 }
 
 export function appraisalMultiplier(state: GameState, category: LootCategory): number {
