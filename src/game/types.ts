@@ -19,9 +19,11 @@ export type PorterState =
 export type ElevatorState = 'IDLE_BOTTOM' | 'LOADING' | 'ASCENDING' | 'UNLOADING' | 'DESCENDING' | 'TRAVELING';
 export type Rarity = 'COMMON' | 'UNCOMMON' | 'RARE' | 'EPIC' | 'RELIC' | 'ANOMALY';
 export type LootCategory = 'ORE' | 'VALUABLE' | 'FOSSIL' | 'RELIC' | 'ANOMALY' | 'RESEARCH' | 'CORE';
-export type DepthId = 'D-001' | 'D-030' | 'D-060' | 'D-100';
-export type Phase5DepthId = DepthId | 'D-180';
+export type DepthId = 'D-001' | 'D-030' | 'D-060' | 'D-100' | 'D-180' | 'D-250' | 'D-400' | 'D-650';
+/** @deprecated Compatibility alias for Milestone 5 code. New systems use DepthId directly. */
+export type Phase5DepthId = DepthId;
 export type NodeProfile = 'NEAR' | 'MID' | 'FAR' | 'CORE';
+export type SiteAccess = 'WALKABLE' | 'REMOTE_ONLY';
 
 export type LootKind =
   | 'STONE'
@@ -53,7 +55,12 @@ export type LootKind =
   | 'ANCIENT_TOOL_CRATE'
   | 'ANCIENT_PACK_CRATE'
   | 'ANCIENT_LAMP_CRATE'
-  | 'ARCHIVE_DEVICE';
+  | 'ARCHIVE_DEVICE'
+  | 'LOST_SIGNAL_SAMPLE'
+  | 'ANCIENT_ALLOY'
+  | 'RAIL_PARTS'
+  | 'NULL_SAMPLE'
+  | 'DEEP_COMPONENT';
 
 export type AnomalyId =
   | 'GOLD_RUSH'
@@ -79,7 +86,13 @@ export type ResearchId =
   | 'CREW_ROUTING'
   | 'CARGO_SCHEDULER'
   | 'ANCIENT_SURVEY'
-  | 'SALVAGE_ANALYSIS';
+  | 'SALVAGE_ANALYSIS'
+  | 'LOST_SURVEY'
+  | 'RAIL_LOGISTICS'
+  | 'FREIGHT_ARCHITECTURE'
+  | 'REMOTE_BORE_CONTROL'
+  | 'NULL_GEOMETRY'
+  | 'DEEP_SHAFT_GEOMETRY';
 
 export type CoreProtocolId =
   | 'EXPERIENCED_HANDS'
@@ -89,7 +102,12 @@ export type CoreProtocolId =
   | 'SURVEY_ARCHIVE'
   | 'CREW_MANIFEST'
   | 'FREIGHT_MEMORY'
-  | 'LEGACY_LOCKER';
+  | 'LEGACY_LOCKER'
+  | 'RAIL_BLUEPRINT'
+  | 'FREIGHT_CHARTER'
+  | 'ENGINEER_LICENSE'
+  | 'BORE_MEMORY'
+  | 'DEEP_SURVEY_ARCHIVE';
 
 export interface LootStack {
   id: string;
@@ -103,7 +121,7 @@ export interface LootStack {
   coreValue: number;
   x: number;
   y: number;
-  originDepth?: Phase5DepthId;
+  originDepth?: DepthId;
   sourceCrewId?: string;
   equipmentSeed?: number;
 }
@@ -129,6 +147,7 @@ export interface MiningNode {
   yieldMax: number;
   respawnTimer: number;
   respawnDelay: number;
+  access?: SiteAccess;
 }
 
 export interface SwingState { elapsed: number; hitApplied: boolean; }
@@ -263,8 +282,8 @@ export type PorterPriority = 'CORE' | 'RESEARCH' | 'RELIC' | 'RARE' | 'VALUE' | 
 export type CargoRoutingPriority = 'BALANCED' | 'CORE' | 'RESEARCH' | 'ANCIENT';
 
 export interface CrewTravelState {
-  from: Phase5DepthId;
-  to: Phase5DepthId;
+  from: DepthId;
+  to: DepthId;
   remaining: number;
   duration: number;
 }
@@ -273,8 +292,8 @@ export interface CrewMember {
   id: string;
   name: string;
   role: CrewRole;
-  assignedDepth: Phase5DepthId;
-  pendingDepth: Phase5DepthId | null;
+  assignedDepth: DepthId;
+  pendingDepth: DepthId | null;
   state: CrewMemberState;
   body: WorkerBody;
   targetNodeId: string | null;
@@ -297,7 +316,7 @@ export interface CrewOperationsState {
 }
 
 export interface CargoRouteState {
-  targetDepth: Phase5DepthId;
+  targetDepth: DepthId;
   remaining: number;
   duration: number;
 }
@@ -306,7 +325,7 @@ export interface CargoNetworkState {
   unlocked: boolean;
   priority: CargoRoutingPriority;
   route: CargoRouteState | null;
-  lastServedDepth: Phase5DepthId | null;
+  lastServedDepth: DepthId | null;
   deliveredLoads: number;
 }
 
@@ -319,7 +338,13 @@ export type EquipmentAffixId =
   | 'LIGHT_FRAME'
   | 'SURVEY_LAMP'
   | 'CARGO_HOOK'
-  | 'CORE_TUNER';
+  | 'CORE_TUNER'
+  | 'RAIL_SPIKES'
+  | 'COURIER_BOOTS'
+  | 'VOID_CUTTER'
+  | 'SURVEY_LAMP_MK2'
+  | 'LOAD_HOOK'
+  | 'BORE_COUPLER';
 
 export interface EquipmentAffix {
   id: EquipmentAffixId;
@@ -344,7 +369,7 @@ export interface EquipmentDropRecord {
   seed: number;
   baseId: string;
   slot: EquipmentSlot;
-  sourceDepth: Phase5DepthId;
+  sourceDepth: DepthId;
 }
 
 export interface EquipmentRunState {
@@ -362,7 +387,7 @@ export interface AncientRuinsState {
 }
 
 export interface OfflineReportEntry {
-  depth: Phase5DepthId;
+  depth: DepthId;
   loads: number;
   data: number;
   scrap: number;
@@ -390,6 +415,133 @@ export interface Phase5RunState {
   offline: OfflineProgressState;
 }
 
+export type RailPriority = 'BULK' | 'RESEARCH' | 'RARE' | 'ANY';
+export type FreightPriority = 'BULK' | 'BALANCED';
+export type TransportLineState = 'BLUEPRINT' | 'BUILDING' | 'READY' | 'JAMMED';
+export type RailCartState = 'IDLE_AT_STOP' | 'LOADING' | 'TRAVELING_TO_HUB' | 'UNLOADING' | 'TRAVELING_TO_STOP' | 'JAMMED';
+
+export interface TransportLine {
+  id: string;
+  type: 'RAIL';
+  depth: DepthId;
+  from: string;
+  to: string;
+  state: TransportLineState;
+  capacity: number;
+  priority: RailPriority;
+  buildProgress: number;
+  requiredBuildProgress: number;
+  inputBuffer: LootStack[];
+  outputBuffer: LootStack[];
+  maxInputWeight: number;
+  maxOutputWeight: number;
+  jamReason: string | null;
+}
+
+export interface RailCart {
+  id: string;
+  lineId: string;
+  position: number;
+  state: RailCartState;
+  stateTimer: number;
+  cargo: LootStack[];
+}
+
+export interface CargoHub {
+  id: string;
+  depth: DepthId;
+  buffer: LootStack[];
+  maxWeight: number;
+}
+
+export type FreightCageState = 'UNBUILT' | 'IDLE' | 'REQUESTED' | 'MOVING_TO_FLOOR' | 'LOADING' | 'ASCENDING' | 'UNLOADING' | 'DESCENDING' | 'JAMMED';
+export interface FreightCage {
+  state: FreightCageState;
+  targetDepth: DepthId | null;
+  position: number;
+  maxLoad: number;
+  moveSpeed: number;
+  stateTimer: number;
+  cargo: LootStack[];
+  priority: FreightPriority;
+  buildProgress: number;
+  requiredBuildProgress: number;
+}
+
+export interface LogisticsState {
+  lines: TransportLine[];
+  railCarts: RailCart[];
+  cargoHubs: CargoHub[];
+  freightCage: FreightCage;
+}
+
+export type EngineerState = 'LOCKED' | 'IDLE' | 'FIND_JOB' | 'MOVING_TO_MACHINE' | 'INSTALLING' | 'REPAIRING' | 'COMPLETE';
+export type EngineerJobKind = 'RAIL_INSTALL' | 'FREIGHT_INSTALL' | 'BORE_INSTALL' | 'JAM_RECOVERY' | 'SHAFT_EXTENSION';
+export interface EngineerJob {
+  id: string;
+  kind: EngineerJobKind;
+  targetId: string;
+  depth: DepthId;
+  progress: number;
+  requiredProgress: number;
+}
+export interface EngineerUnit {
+  id: string;
+  name: string;
+  unlocked: boolean;
+  state: EngineerState;
+  assignedDepth: DepthId;
+  x: number;
+  moveSpeed: number;
+  job: EngineerJob | null;
+}
+
+export type RemoteBoreState = 'BLUEPRINT' | 'INSTALLING' | 'IDLE' | 'DRILLING' | 'BLOCKED' | 'JAMMED';
+export interface RemoteBore {
+  id: string;
+  depth: DepthId;
+  siteId: string;
+  targetNodeId: string | null;
+  state: RemoteBoreState;
+  cycleProgress: number;
+  cycleDuration: number;
+  hitAt: number;
+  damage: number;
+  outputBuffer: LootStack[];
+  maxOutputWeight: number;
+  connectedLineId: string | null;
+  installProgress: number;
+  requiredInstallProgress: number;
+}
+export interface DeepAutomationState { bores: RemoteBore[]; }
+
+export interface DeepInstrumentation {
+  runStartedAt: number;
+  rebootAt: number | null;
+  depthUnlockedAt: Partial<Record<DepthId, number>>;
+  researchUnlockedAt: Partial<Record<ResearchId, number>>;
+  railUnlockedAt: number | null;
+  freightUnlockedAt: number | null;
+  boreUnlockedAt: number | null;
+  d650ReachedAt: number | null;
+}
+
+export interface DeepProgressState {
+  lostSignalFound: boolean;
+  lostSampleDelivered: boolean;
+  railPartsDelivered: number;
+  nullSampleDelivered: boolean;
+  deepComponentsDelivered: number;
+  d250Unlocked: boolean;
+  d400Unlocked: boolean;
+  d650Unlocked: boolean;
+  railBlueprint: boolean;
+  freightBlueprint: boolean;
+  boreBlueprint: boolean;
+  shaftConstructionStarted: boolean;
+  instrumentation: DeepInstrumentation;
+}
+
 export interface RunState {
   seed: number;
   rngState: number;
@@ -412,6 +564,10 @@ export interface RunState {
   coreChamber: CoreChamberState;
   discovery: DiscoveryState;
   phase5: Phase5RunState;
+  logistics: LogisticsState;
+  engineer: EngineerUnit;
+  deepAutomation: DeepAutomationState;
+  deepProgress: DeepProgressState;
   nextLootId: number;
 }
 
@@ -425,6 +581,7 @@ export interface MetaProgression {
   bestDepth: DepthId;
   equipmentDiscoveries: string[];
   ancientDiscoveries: string[];
+  deepDiscoveries: string[];
   legacyEquipment: EquipmentItem | null;
 }
 
@@ -438,6 +595,10 @@ export type Selection =
   | { type: 'core-console' }
   | { type: 'core-chamber' }
   | { type: 'crew-board' }
+  | { type: 'rail-stop'; id: string }
+  | { type: 'cargo-hub'; id: string }
+  | { type: 'freight-control' }
+  | { type: 'bore-console'; id: string }
   | null;
 
 export type GameEventType =
@@ -458,6 +619,12 @@ export type GameEventType =
   | 'FLOOR_CARGO_DEPOSITED' | 'CARGO_ROUTE_REQUESTED' | 'ELEVATOR_STOP_SELECTED' | 'ELEVATOR_ARRIVED_DEPTH' | 'FLOOR_CARGO_LOADED'
   | 'EQUIPMENT_DROP' | 'EQUIPMENT_APPRAISED' | 'EQUIPMENT_EQUIPPED'
   | 'D180_SIGNAL_FOUND' | 'D180_UNLOCKED' | 'ANCIENT_DISCOVERY_FOUND'
+  | 'TRANSPORT_LINE_READY' | 'RAIL_CARGO_QUEUED' | 'RAIL_CART_LOADING' | 'RAIL_CART_DEPARTED' | 'RAIL_CART_ARRIVED' | 'RAIL_CARGO_UNLOADED'
+  | 'ENGINEER_JOB_ASSIGNED' | 'ENGINEER_INSTALL_STARTED' | 'ENGINEER_INSTALL_COMPLETED'
+  | 'FREIGHT_REQUESTED' | 'FREIGHT_LOADING' | 'FREIGHT_DEPARTED' | 'FREIGHT_APPRAISED'
+  | 'BORE_INSTALL_STARTED' | 'BORE_INSTALL_COMPLETED' | 'BORE_CYCLE_STARTED' | 'BORE_HIT' | 'BORE_OUTPUT'
+  | 'D250_SIGNAL_FOUND' | 'D250_UNLOCKED' | 'D400_UNLOCKED' | 'D650_UNLOCKED'
+  | 'CARGO_JAMMED' | 'CARGO_JAM_RECOVERED'
   | 'OFFLINE_PROGRESS_APPLIED';
 
 export interface GameEvent {
@@ -468,7 +635,7 @@ export interface GameEvent {
 }
 
 export interface GameState {
-  version: 5;
+  version: 6;
   elapsed: number;
   run: RunState;
   meta: MetaProgression;
