@@ -21,12 +21,22 @@ export const PLAYER_MOVE_SPEED = { 1: 42, 2: 66 } as const;
 export const PLAYER_PACK_CAPACITY = { 1: 8, 2: 15 } as const;
 export const PORTER_MOVE_SPEED = 36;
 export const PORTER_CAPACITY = 7;
+export const CREW_MINER_MOVE_SPEED = 31;
+export const CREW_PORTER_MOVE_SPEED = 34;
+export const CREW_PORTER_CAPACITY = 8;
 export const BASE_ELEVATOR_CAPACITY = 20;
 export const BASE_ELEVATOR_SPEED = 0.34;
 export const AUTO_DISPATCH_MIN_WEIGHT = 11;
 export const D030_EXTENSION_COST = 2200;
 export const D060_EXTENSION_COST = 6500;
 export const D100_EXTENSION_COST = 7000;
+export const D180_EXTENSION_COST = 14500;
+export const CREW_BOARD_COST = 1800;
+export const CREW_SLOT_COSTS = [0, 0, 3200, 5200] as const;
+export const CREW_TRAVEL_DURATION = 3.4;
+export const CARGO_ROUTE_DURATION = 2.4;
+export const OFFLINE_CAP_SECONDS = 20 * 60;
+export const OFFLINE_STEP_SECONDS = 0.1;
 export const FLOOR_TRAVEL_DURATION = 2.8;
 export const FLOOR_TRAVEL_VIA_SURFACE_DURATION = 4.8;
 export const AUTO_SWING_MANUAL_SWINGS_REQUIRED = 6;
@@ -70,6 +80,10 @@ export const LOOT: Record<LootKind, LootDefinition> = {
   UNKNOWN_INSTRUMENT: { name: 'Unknown Instrument', rarity: 'RELIC', category: 'RESEARCH', weight: 1.4, value: 15, dataValue: 8 },
   CORE_FRAGMENT: { name: 'Core Fragment', rarity: 'RELIC', category: 'CORE', weight: 1.25, value: 0, coreValue: 1 },
   CORE_MATRIX: { name: 'Core Matrix', rarity: 'ANOMALY', category: 'CORE', weight: 1.7, value: 0, coreValue: 2 },
+  ANCIENT_TOOL_CRATE: { name: 'Sealed Tool Crate', rarity: 'EPIC', category: 'RELIC', weight: 2.4, value: 0 },
+  ANCIENT_PACK_CRATE: { name: 'Collapsed Field Pack', rarity: 'RARE', category: 'RELIC', weight: 2.1, value: 0 },
+  ANCIENT_LAMP_CRATE: { name: 'Survey Lamp Case', rarity: 'EPIC', category: 'RELIC', weight: 1.4, value: 0 },
+  ARCHIVE_DEVICE: { name: 'Archive Interface', rarity: 'RELIC', category: 'RESEARCH', weight: 1.8, value: 0, dataValue: 6 },
 };
 
 export const VALUABLE_KINDS: readonly LootKind[] = ['GOLD_NUGGET', 'NATURAL_GOLD', 'GEM', 'OLD_COIN', 'POCKET_WATCH'];
@@ -78,6 +92,7 @@ export const RELIC_KINDS: readonly LootKind[] = ['PROSPECTOR_LENS', 'RHYTHM_RELA
 export const ANOMALY_KINDS: readonly LootKind[] = ['BLACK_GLASS_HEART'];
 export const RESEARCH_KINDS: readonly LootKind[] = ['CRYSTAL_MEMORY', 'SURVEY_CARTRIDGE', 'DAMAGED_RESEARCH_LOG', 'RESONANCE_SHARD', 'UNKNOWN_INSTRUMENT'];
 export const CORE_KINDS: readonly LootKind[] = ['CORE_FRAGMENT', 'CORE_MATRIX'];
+export const EQUIPMENT_CRATE_KINDS: readonly LootKind[] = ['ANCIENT_TOOL_CRATE', 'ANCIENT_PACK_CRATE', 'ANCIENT_LAMP_CRATE'];
 export const COLLECTIBLE_KINDS: readonly LootKind[] = [...FOSSIL_KINDS, ...RELIC_KINDS, ...ANOMALY_KINDS];
 
 export const ANOMALIES: Record<AnomalyId, { name: string; description: string }> = {
@@ -105,6 +120,10 @@ export const RESEARCH: Record<ResearchId, ResearchDefinition> = {
   MULTI_STOP_RELAY: { name: 'Multi-Stop Relay', description: 'Unlock direct underground floor-to-floor travel.', dataCost: 6, duration: 32, prerequisite: 'DEEP_SURVEY' },
   STRATA_SCANNER: { name: 'Strata Scanner', description: 'Reveal detailed node tendencies before mining.', dataCost: 6, duration: 30, prerequisite: 'DEEP_SURVEY' },
   CORE_RESONANCE: { name: 'Core Resonance', description: 'Decode the Core Shell and authorize the D-100 extension.', dataCost: 14, duration: 40, prerequisite: 'DEEP_SURVEY' },
+  CREW_ROUTING: { name: 'Crew Routing', description: 'Turn the old Porter workflow into assignable Miner / Porter shifts.', dataCost: 8, duration: 34, prerequisite: 'DEEP_SURVEY' },
+  CARGO_SCHEDULER: { name: 'Cargo Scheduler', description: 'Let the one Central Elevator service Floor Cargo queues from several depths.', dataCost: 9, duration: 36, prerequisite: 'CREW_ROUTING' },
+  ANCIENT_SURVEY: { name: 'Ancient Survey', description: 'Decode the signal below D-100 and authorize a shaft push toward D-180.', dataCost: 12, duration: 42, prerequisite: 'CORE_RESONANCE' },
+  SALVAGE_ANALYSIS: { name: 'Salvage Analysis', description: 'Expose more information about sealed equipment before appraisal.', dataCost: 8, duration: 30, prerequisite: 'ANCIENT_SURVEY' },
 };
 
 export interface ProtocolDefinition { name: string; description: string; cost: number; }
@@ -114,6 +133,9 @@ export const CORE_PROTOCOLS: Record<CoreProtocolId, ProtocolDefinition> = {
   SHAFT_BLUEPRINT: { name: 'Shaft Blueprint', description: 'D-030 shaft extension costs 70% less Scrap.', cost: 2 },
   VETERAN_ELEVATOR: { name: 'Veteran Elevator', description: 'Start with the Auto Dispatch relay already installed.', cost: 3 },
   SURVEY_ARCHIVE: { name: 'Survey Archive', description: 'Deep Survey begins completed from archived field notes.', cost: 2 },
+  CREW_MANIFEST: { name: 'Crew Manifest', description: 'Begin the next Run with the first Miner already on the shift board.', cost: 4 },
+  FREIGHT_MEMORY: { name: 'Freight Memory', description: 'Begin the next Run with Cargo Scheduler routing available.', cost: 4 },
+  LEGACY_LOCKER: { name: 'Legacy Locker', description: 'Carry one appraised Equipment instance into the next Run.', cost: 5 },
 };
 
 export function createD001Nodes(): MiningNode[] {
@@ -145,6 +167,14 @@ export function createD100Nodes(): MiningNode[] {
     node('shell-scree', 'Shell Scree', 'NEAR', 94, 138, 13, ['IRON', 'COPPER'], 0.18, [0.35, 0.08, 0.12, 0.02, 0.43, 0], 4, 6, 11),
     node('conduit-vein', 'Conduit Vein', 'MID', 348, 164, 23, ['COPPER', 'IRON'], 0.32, [0.18, 0.05, 0.16, 0.02, 0.59, 0], 3, 5, 14),
     node('core-shell', 'Core Shell', 'CORE', 433, 260, 38, ['STONE'], 1, [0, 0, 0, 0, 0, 1], 0, 0, 18),
+  ];
+}
+
+export function createD180Nodes(): MiningNode[] {
+  return [
+    node('ruined-workshop', 'Ruined Workshop', 'NEAR', 96, 164, 14, ['IRON', 'COPPER'], 0.38, [0.2, 0.02, 0.34, 0.01, 0.18, 0.02], 3, 5, 15),
+    node('archive-vault', 'Archive Vault', 'MID', 350, 196, 25, ['STONE', 'COPPER'], 0.46, [0.05, 0.02, 0.28, 0.01, 0.62, 0.02], 2, 4, 19),
+    node('sealed-chamber', 'Sealed Chamber', 'FAR', 438, 320, 39, ['IRON'], 0.58, [0.06, 0.01, 0.3, 0.02, 0.24, 0.37], 1, 3, 27),
   ];
 }
 
