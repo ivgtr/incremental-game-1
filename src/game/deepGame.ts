@@ -4,7 +4,6 @@ import {
   BORE_DAMAGE,
   BORE_HIT_AT,
   BORE_INSTALL_COST,
-  BORE_LINE_CAPACITY,
   BORE_OUTPUT_CAPACITY,
   CARGO_HUB_X,
   D250_EXTENSION_COST,
@@ -13,7 +12,6 @@ import {
   DEEP_COMPONENTS_REQUIRED,
   ENGINEER_WORK_RATE,
   FREIGHT_BUILD_PROGRESS,
-  FREIGHT_CAPACITY,
   FREIGHT_INSTALL_COST,
   FREIGHT_LOAD_DURATION,
   FREIGHT_TRAVEL_DURATION,
@@ -32,7 +30,7 @@ import {
   WORLD,
 } from './config';
 import { deeperDepth } from './depth';
-import { appraisalMultiplier, getModifiers } from './modifiers';
+import { appraisalMultiplier } from './modifiers';
 import { hashSeed, nextRandom, pick } from './rng';
 import { cargoWeight } from './simulation';
 import type {
@@ -43,7 +41,6 @@ import type {
   GameEvent,
   GameEventType,
   GameState,
-  LootCategory,
   LootKind,
   LootStack,
   MiningNode,
@@ -478,8 +475,6 @@ function updateTransportLine(state: GameState, line: TransportLine, dt: number):
       cart.state = 'IDLE_AT_STOP';
       cart.stateTimer = 0;
       return;
-    case 'JAMMED':
-      return;
   }
 }
 
@@ -557,9 +552,6 @@ function updateFreight(state: GameState, dt: number): void {
       cage.targetDepth = null;
       cage.state = 'IDLE';
       cage.stateTimer = 0;
-      return;
-    case 'JAMMED':
-    case 'UNBUILT':
       return;
   }
 }

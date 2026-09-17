@@ -181,8 +181,8 @@ describe('Milestone 6 — Deep Network / Industrial Depths', () => {
   it('keeps upstream Cargo waiting when the Rail Stop buffer cannot accept it', () => {
     const state = prepareRail(6006);
     const line = state.run.logistics.lines[0]!;
-    line.maxInputWeight = 2;
     const heavy = makeLoot('ANCIENT_ALLOY', 'too-heavy', 'D-250');
+    line.maxInputWeight = Math.max(0, heavy.weight - 0.1);
     state.run.floors['D-250'].cargo.push(heavy);
     for (let index = 0; index < 120; index += 1) step(state);
     expect(state.run.floors['D-250'].cargo.some((item) => item.id === heavy.id)).toBe(true);
