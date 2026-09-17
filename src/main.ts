@@ -2,7 +2,6 @@ import './style.css';
 import { GameAudio } from './game/audio';
 import {
   ANOMALIES,
-  AUTO_DISPATCH_MIN_WEIGHT,
   AUTO_SWING_MANUAL_SWINGS_REQUIRED,
   BORE_INSTALL_COST,
   CORE_PROTOCOLS,
@@ -45,7 +44,6 @@ import {
   armPhase5Reboot,
   assignCrew,
   canPushD180,
-  canShowCrewBoard,
   canTravelPhase5,
   canUnlockCrewOperations,
   equipCrewItem,
@@ -82,7 +80,6 @@ import {
   drainEvents,
   effectiveTreasureChance,
   moveToSelectedNode,
-  porterWeight,
   purchaseCoreProtocol,
   requestMine,
   selectArchive,
@@ -124,7 +121,7 @@ import type {
   RailPriority,
   ResearchId,
 } from './game/types';
-import { Phase5Renderer } from './render/phase5Renderer';
+import { GameRenderer } from './render/gameRenderer';
 
 const FIXED_STEP = 1 / 60;
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -140,7 +137,7 @@ root.innerHTML = `
       </div>
       <section class="context-strip" id="context" aria-live="polite"></section>
       <div class="help-line">
-        <span>Click a vein to move · click again or press <kbd>Space</kbd> to swing</span>
+        <span>Click a vein or machine to inspect it · press <kbd>Space</kbd> to swing</span>
         <span>Cargo stays physical: mine → carry → line → vertical transport → Surface.</span>
       </div>
     </div>
@@ -155,7 +152,7 @@ const uiHtml = new WeakMap<HTMLElement, string>();
 let state: GameState = loadFromStorage() ?? createGameState();
 const restoredOffline = applyOfflineProgress(state);
 if (restoredOffline) saveToStorage(state);
-const renderer = new Phase5Renderer(canvas);
+const renderer = new GameRenderer(canvas);
 const audio = new GameAudio();
 let accumulator = 0;
 let saveTimer = 0;
@@ -176,7 +173,11 @@ canvas.addEventListener('click', (event) => {
       if (isCurrent && canMine(state)) requestMine(state);
       else selectNode(state, target.id);
     }
-  } else if (target.type === 'crew-board') selectCrewBoard(state);
+  } else if (target.type === 'rail-stop') state.selection = { type: 'rail-stop', id: target.id };
+  else if (target.type === 'cargo-hub') state.selection = { type: 'cargo-hub', id: target.id };
+  else if (target.type === 'freight-control') state.selection = { type: 'freight-control' };
+  else if (target.type === 'bore-console') state.selection = { type: 'bore-console', id: target.id };
+  else if (target.type === 'crew-board') selectCrewBoard(state);
   else if (target.type === 'elevator') selectElevator(state);
   else if (target.type === 'workbench') selectWorkbench(state);
   else if (target.type === 'scanner') selectScanner(state);
@@ -191,7 +192,8 @@ canvas.addEventListener('click', (event) => {
 window.addEventListener('keydown', (event) => {
   if (event.code !== 'Space') return;
   event.preventDefault();
-  const selected = state.selection?.type === 'node' ? currentFloor(state).nodes.find((node) => node.id === state.selection?.id) : undefined;
+  const selection = state.selection;
+  const selected = selection?.type === 'node' ? currentFloor(state).nodes.find((node) => node.id === selection.id) : undefined;
   if (!selected || canPlayerAccessNode(selected)) requestMine(state);
 });
 
@@ -333,6 +335,10 @@ function renderDom(): void {
     if (node) renderNodeContext(node);
     return;
   }
+  if (state.selection?.type === 'rail-stop') { renderRailContext(state.selection.id); return; }
+  if (state.selection?.type === 'cargo-hub') { renderCargoHubContext(state.selection.id); return; }
+  if (state.selection?.type === 'freight-control') { renderFreightContext(); return; }
+  if (state.selection?.type === 'bore-console') { renderBoreContext(state.selection.id); return; }
   if (state.selection?.type === 'elevator') { renderElevatorContext(); return; }
   if (state.selection?.type === 'workbench') { renderWorkbenchContext(); return; }
   if (state.selection?.type === 'scanner') { renderScannerContext(); return; }
@@ -367,6 +373,37 @@ function nodeReadout(node: MiningNode): string {
   if (depth === 'D-400') return ` · NULL STRATA · ${node.id === 'null-edge' ? 'Player / Miner access' : node.id === 'echo-pocket' ? 'Remote Bore / Research' : 'Deep Component / Core'}`;
   if (playerHasEquipmentAffix(state, 'SURVEY_LAMP')) return ` · Research ${signal(node.researchWeight)} · Rare ${signal(effectiveTreasureChance(state, node))}`;
   return '';
+}
+
+function renderRailContext(lineId: string): void {
+  const line = state.run.logistics.lines.find((candidate) => candidate.id === lineId);
+  if (!line) return;
+  const cart = state.run.logistics.railCarts.find((candidate) => candidate.lineId === line.id);
+  const actions = `<span class="depth-buttons">${(['BULK', 'RESEARCH', 'RARE', 'ANY'] as RailPriority[]).map((priority) => `<button class="action ${line.priority === priority ? 'toggle-on' : ''}" data-action="rail-priority" data-line="${line.id}" data-priority="${priority}">${priority}</button>`).join('')}</span>`;
+  setHtml(context, contextMarkup('Rail Stop / Line Control', `${formatState(line.state)} · stop ${fmt(cargoWeight(line.inputBuffer))}/${fmt(line.maxInputWeight)}kg · cart ${cart ? formatState(cart.state) : 'MISSING'} ${cart ? fmt(cargoWeight(cart.cargo)) : 0}kg${line.jamReason ? ` · JAM ${line.jamReason}` : ''}`, actions));
+}
+
+function renderCargoHubContext(hubId: string): void {
+  const hub = state.run.logistics.cargoHubs.find((candidate) => candidate.id === hubId);
+  if (!hub) return;
+  const freight = state.run.logistics.freightCage;
+  const actions = freight.state === 'UNBUILT'
+    ? `<button class="action primary" data-action="build-freight" ${canStartFreightConstruction(state) ? '' : 'disabled'}>BUILD FREIGHT CAGE · ${FREIGHT_INSTALL_COST}</button>`
+    : `<span class="depth-buttons">${(['BULK', 'BALANCED'] as FreightPriority[]).map((priority) => `<button class="action ${freight.priority === priority ? 'toggle-on' : ''}" data-action="freight-priority" data-priority="${priority}">${priority}</button>`).join('')}</span>`;
+  setHtml(context, contextMarkup('Cargo Hub', `${hub.depth} · ${fmt(cargoWeight(hub.buffer))}/${fmt(hub.maxWeight)}kg · bulk waits for Freight; rare/research can return to Central Elevator.`, actions));
+}
+
+function renderFreightContext(): void {
+  const cage = state.run.logistics.freightCage;
+  const actions = `<span class="depth-buttons">${(['BULK', 'BALANCED'] as FreightPriority[]).map((priority) => `<button class="action ${cage.priority === priority ? 'toggle-on' : ''}" data-action="freight-priority" data-priority="${priority}">${priority}</button>`).join('')}</span>`;
+  setHtml(context, contextMarkup('Freight Cage', `${formatState(cage.state)} · cargo-only · ${fmt(cargoWeight(cage.cargo))}/${fmt(cage.maxLoad)}kg${cage.targetDepth ? ` · target ${cage.targetDepth}` : ''}. Central Elevator remains the priority/personnel route.`, actions));
+}
+
+function renderBoreContext(boreId: string): void {
+  const bore = state.run.deepAutomation.bores.find((candidate) => candidate.id === boreId);
+  if (!bore) return;
+  const line = bore.connectedLineId ? state.run.logistics.lines.find((candidate) => candidate.id === bore.connectedLineId) : undefined;
+  setHtml(context, contextMarkup('Remote Bore Console', `${bore.siteId} · ${formatState(bore.state)} · target ${bore.targetNodeId ?? 'NONE'} · cycle ${Math.round((bore.cycleProgress / Math.max(0.001, bore.cycleDuration)) * 100)}% · output ${fmt(cargoWeight(bore.outputBuffer))}/${fmt(bore.maxOutputWeight)}kg · line ${line ? formatState(line.state) : 'DISCONNECTED'}`, ''));
 }
 
 function renderElevatorContext(): void {
@@ -488,7 +525,7 @@ function nextObjective(current: GameState): string {
   if (run.depth.current === 'D-650') return 'D-650 · ??? · The shaft reaches an unreadable structure. This is the current endpoint.';
   if (run.depth.current === 'D-400') {
     if (!run.deepAutomation.bores.length) return 'Null Strata breaks ordinary walking. Inspect Remote-only sites and install a Bore.';
-    if (run.deepProgress.deepComponentsDelivered < 3) return 'Keep the Bore output connected through a Line and Freight route until Deep Components reach Surface.';
+    if (run.deepProgress.deepComponentsDelivered < 3) return 'Keep Bore output connected through a Line and Freight route until Deep Components reach Surface.';
     return 'Analyze the delivered Deep Components and complete Deep Shaft Geometry.';
   }
   if (run.depth.current === 'D-250') {
