@@ -30,3 +30,13 @@ npm test
 npx playwright install chromium
 npm run test:e2e
 ```
+
+## GitHub Pages
+
+For the first deployment, select **GitHub Actions** under
+**Settings → Pages → Build and deployment → Source**.
+
+Pushes to `main` are built and deployed automatically by the
+`Deploy to GitHub Pages` workflow. The published site is available at:
+
+https://ivgtr.github.io/loop-shaft/
